@@ -24,7 +24,18 @@ if (Test-Path $Lock) {
 Start-Transcript -Path $Log -Append | Out-Null
 try {
     Write-Host ("===== 定时测速开始 {0:yyyy-MM-dd HH:mm:ss} =====" -f (Get-Date))
-    & (Join-Path $Here 'latency.ps1') -Trace
+    # 测哪些区域、是否追踪路径：测速网站"定时任务"页保存在 config\schedule.json；
+    # 没保存过时不传 -Regions（按 config.psd1 的 Regions，留空 = 全部区域），并追踪路径
+    $runArgs = @{ Trace = $true }
+    $override = Join-Path (Split-Path -Parent $Here) 'config\schedule.json'
+    if (Test-Path $override) {
+        try {
+            $o = Get-Content $override -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($o.Regions) { $runArgs.Regions = @($o.Regions) }
+            if ($null -ne $o.Trace -and -not $o.Trace) { $runArgs.Remove('Trace') }
+        } catch { Write-Host "读取 config\schedule.json 失败，按默认设置测速：$_" }
+    }
+    & (Join-Path $Here 'latency.ps1') @runArgs
     Write-Host ("===== 定时测速结束 {0:yyyy-MM-dd HH:mm:ss} =====`n" -f (Get-Date))
 } catch {
     Write-Host "运行出错: $_"

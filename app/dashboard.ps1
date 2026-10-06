@@ -142,12 +142,17 @@ function Get-ScheduleConfig {
     $s = if ($c.Schedule) { $c.Schedule } else { @{} }
     $times = if ($s.Times) { @($s.Times) } else { @(0..23 | ForEach-Object { '{0:D2}:00' -f $_ }) }
     $delay = if ($null -ne $s.RandomDelayMinutes) { [int]$s.RandomDelayMinutes } else { 5 }
+    $regions = if ($c.Regions) { @($c.Regions) } else { @('all') }   # 'all' = 全部区域
+    $trace = $true
     if (Test-Path $ScheduleOverride) {
         $o = Get-Content $ScheduleOverride -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($o.Times) { $times = @($o.Times) }
         if ($null -ne $o.RandomDelayMinutes) { $delay = [int]$o.RandomDelayMinutes }
+        if ($o.Regions) { $regions = @($o.Regions) }
+        if ($null -ne $o.Trace) { $trace = [bool]$o.Trace }
     }
-    @{ times = $times; delay = $delay; logonType = $(if ($s.LogonType) { $s.LogonType } else { 'Interactive' }); fromWeb = (Test-Path $ScheduleOverride) }
+    @{ times = $times; delay = $delay; regions = $regions; trace = $trace
+       logonType = $(if ($s.LogonType) { $s.LogonType } else { 'Interactive' }); fromWeb = (Test-Path $ScheduleOverride) }
 }
 
 function Get-ScheduleInfo {
@@ -188,7 +193,13 @@ function Save-Schedule($body) {
     $times = @($body.times | Where-Object { $_ -match '^\d{2}:\d{2}$' } | Sort-Object -Unique)
     if (-not $times.Count) { return @{ ok = $false; message = '请至少选择一个时间点' } }
     $delay = [int]$body.delay; if ($delay -lt 0 -or $delay -gt 59) { $delay = 5 }
-    @{ Times = $times; RandomDelayMinutes = $delay } | ConvertTo-Json | Set-Content $ScheduleOverride -Encoding UTF8
+    $valid = @($RegionInfo.regions | ForEach-Object { $_.code })
+    $regs = @($body.regions | Where-Object { $_ -eq 'all' -or $valid -contains $_ })
+    if ($regs -contains 'all') { $regs = @('all') }
+    if (-not $regs.Count) { return @{ ok = $false; message = '请至少选择一个区域' } }
+    $trace = if ($null -ne $body.trace) { [bool]$body.trace } else { $true }
+    # 区域和路径追踪由 scheduled-run.ps1 每次运行时读取；时间点和随机推迟由 install-schedule.ps1 安装时读取
+    @{ Times = $times; RandomDelayMinutes = $delay; Regions = $regs; Trace = $trace } | ConvertTo-Json | Set-Content $ScheduleOverride -Encoding UTF8
     try { $out = (& $InstallScript *>&1 | Out-String).Trim() } catch { $out = "$($_.Exception.Message)" }
     if ($out -match 'Access is denied|拒绝访问|0x80070005') { $out += "`n权限不足：请右键「启动测速网站.cmd」→「以管理员身份运行」后再保存" }
     try { $t = Get-TaskCom } catch { $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }

@@ -33,7 +33,7 @@ select,input[type=number],input[type=text]{background:var(--card);color:var(--fg
 .chips input{margin-right:4px}
 .selrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
 .selrow .chips{margin-top:0}
-#contBar{padding-bottom:8px;margin-bottom:2px;border-bottom:1px dashed var(--line)}
+.contbar{padding-bottom:8px;margin-bottom:2px;border-bottom:1px dashed var(--line)}
 .selname{min-width:118px;cursor:pointer;user-select:none;white-space:nowrap}
 .selname input{margin-right:6px}
 .cnt{color:var(--muted);font-size:12px;margin-left:3px}
@@ -88,13 +88,7 @@ dl.kv dd{margin:0}
 <section id="tab-run">
   <div class="card">
     <h2>选择测速区域 <span class="muted" style="font-weight:normal;font-size:13px">（对照组每次都会测）</span></h2>
-    <div class="row">
-      <button class="btn" data-sel="all">全选</button>
-      <button class="btn" data-sel="none">清空</button>
-      <button class="btn" data-sel="top">常用对比</button>
-    </div>
-    <div class="selrow" id="contBar"></div>
-    <div id="regionGroups"></div>
+    <div id="runPicker"></div>
     <div class="row" style="margin-top:12px">
       <label>每个区域测 <input type="number" id="rounds" value="12" min="1" max="50" style="width:64px"> 次</label>
       <label><input type="checkbox" id="trace"> 追踪去程/回程路径（多约 1~2 分钟）</label>
@@ -181,7 +175,15 @@ dl.kv dd{margin:0}
     </div>
   </div>
   <div class="card">
-    <h2>设置运行时间 <span class="muted" style="font-weight:normal;font-size:13px">（每天在勾选的整点各测一次；测全部区域每次约 6~8 分钟）</span></h2>
+    <h2>定时测哪些区域 <span class="muted" style="font-weight:normal;font-size:13px">（对照组每次都会测；和下方运行时间一起「保存并安装」后生效）</span></h2>
+    <div id="scPicker"></div>
+    <div class="row" style="margin-top:12px">
+      <label><input type="checkbox" id="scTrace" checked> 追踪去程/回程路径（多约 1~2 分钟；长期积累可分析晚高峰绕路）</label>
+      <span id="scEstimate" class="muted"></span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>设置运行时间 <span class="muted" style="font-weight:normal;font-size:13px">（每天在勾选的整点各测一次）</span></h2>
     <div class="row">
       <button class="btn" data-hours="all">每小时</button>
       <button class="btn" data-hours="2">每 2 小时</button>
@@ -294,58 +296,65 @@ const byCont = (a, b) => CONTS.indexOf(a) - CONTS.indexOf(b);
 // 分组勾选框：厂商 / 大洲 / 厂商+大洲；后面的 .cnt 显示"已选/总数"
 const grpBox = (label, prov, cont) =>
   `<input type="checkbox" class="grp"${prov ? ` data-prov="${prov}"` : ''}${cont ? ` data-cont="${cont}"` : ''}>${label}<span class="cnt"></span>`;
-function renderRegionPicker() {
+// 区域选择组件（"执行测速"页和"定时任务"页各放一份）：按厂商 / 按大洲批量选，明细默认收起
+function makeRegionPicker(root, onChange) {
   const regs = INFO.regions.map(r => ({ ...r, continent: r.continent || '其他' }));
   const provs = [...new Set(regs.map(r => r.provider))];
   const contsOf = list => [...new Set(list.map(r => r.continent))].sort(byCont);
-  // 顶部：跨厂商按大洲选
-  $('#contBar').innerHTML = '<span class="selname muted">按大洲</span><div class="chips">' +
-    contsOf(regs).map(c => `<label>${grpBox(c, '', c)}</label>`).join('') + '</div>';
-  // 每家厂商一行摘要（厂商 + 各大洲开关），区域明细默认收起
-  $('#regionGroups').innerHTML = provs.map(p => {
-    const list = regs.filter(r => r.provider === p);
-    return `<div class="selrow"><label class="selname">${grpBox(`<b>${p}</b>`, p)}</label>
-      <div class="chips">${contsOf(list).map(c => `<label>${grpBox(c, p, c)}</label>`).join('')}</div>
-      <button class="linkbtn" data-detail="${p}">展开明细 ▾</button></div>
-      <div class="provdetail hidden" data-detail-of="${p}">${contsOf(list).map(c => `<div class="controw"><label class="contname"><input type="checkbox" class="grp" data-prov="${p}" data-cont="${c}">${c}</label><div class="chips">` +
-        list.filter(r => r.continent === c).map(r => `<label><input type="checkbox" class="reg" value="${r.code}" data-prov="${p}" data-cont="${c}">${esc(r.name.replace(p + ' ', ''))}</label>`).join('') +
-        '</div></div>').join('')}</div>`;
-  }).join('') +
+  root.innerHTML = `<div class="row"><button class="btn" data-sel="all">全选</button><button class="btn" data-sel="none">清空</button><button class="btn" data-sel="top">常用对比</button></div>` +
+    // 跨厂商按大洲选
+    '<div class="selrow contbar"><span class="selname muted">按大洲</span><div class="chips">' +
+    contsOf(regs).map(c => `<label>${grpBox(c, '', c)}</label>`).join('') + '</div></div>' +
+    // 每家厂商一行摘要（厂商 + 各大洲开关），区域明细默认收起
+    provs.map(p => {
+      const list = regs.filter(r => r.provider === p);
+      return `<div class="selrow"><label class="selname">${grpBox(`<b>${p}</b>`, p)}</label>
+        <div class="chips">${contsOf(list).map(c => `<label>${grpBox(c, p, c)}</label>`).join('')}</div>
+        <button class="linkbtn" data-detail="${p}">展开明细 ▾</button></div>
+        <div class="provdetail hidden" data-detail-of="${p}">${contsOf(list).map(c => `<div class="controw"><label class="contname"><input type="checkbox" class="grp" data-prov="${p}" data-cont="${c}">${c}</label><div class="chips">` +
+          list.filter(r => r.continent === c).map(r => `<label><input type="checkbox" class="reg" value="${r.code}" data-prov="${p}" data-cont="${c}">${esc(r.name.replace(p + ' ', ''))}</label>`).join('') +
+          '</div></div>').join('')}</div>`;
+    }).join('') +
     `<div class="selrow"><b class="selname">对照组</b><span class="muted">${INFO.references.map(esc).join('、') || '（无，可在 config\\config.psd1 的 Reference 中添加自己的服务器）'}</span></div>`;
-  $$('.reg').forEach(c => c.onchange = onRegionsChanged);
-  $$('.grp').forEach(g => g.onchange = () => { groupRegs(g).forEach(c => c.checked = g.checked); onRegionsChanged(); });
-  $$('[data-detail]').forEach(b => b.onclick = () => {
-    const d = $(`[data-detail-of="${b.dataset.detail}"]`), open = d.classList.toggle('hidden') === false;
+  const q = s => [...root.querySelectorAll(s)], boxes = () => q('.reg');
+  // 某个分组勾选框管辖的区域勾选框
+  const groupRegs = g => boxes().filter(c => (!g.dataset.prov || c.dataset.prov === g.dataset.prov) && (!g.dataset.cont || c.dataset.cont === g.dataset.cont));
+  // 分组勾选框随区域勾选同步：全选 = 勾上，部分 = 半选，全不选 = 空；并更新"已选/总数"
+  const changed = () => {
+    q('.grp').forEach(g => {
+      const rs = groupRegs(g), n = rs.filter(c => c.checked).length;
+      g.checked = n === rs.length; g.indeterminate = n > 0 && n < rs.length;
+      const cnt = g.parentElement.querySelector('.cnt'); if (cnt) cnt.textContent = `${n}/${rs.length}`;
+    });
+    onChange && onChange();
+  };
+  const picker = {
+    get: () => boxes().filter(c => c.checked).map(c => c.value),
+    isAll: () => boxes().every(c => c.checked),
+    set: codes => { boxes().forEach(c => c.checked = codes.includes(c.value)); changed(); },
+    select: mode => { boxes().forEach(c => c.checked = mode === 'all' ? true : mode === 'none' ? false : TOP.includes(c.value)); changed(); },
+  };
+  boxes().forEach(c => c.onchange = changed);
+  q('.grp').forEach(g => g.onchange = () => { groupRegs(g).forEach(c => c.checked = g.checked); changed(); });
+  q('[data-sel]').forEach(b => b.onclick = () => picker.select(b.dataset.sel));
+  q('[data-detail]').forEach(b => b.onclick = () => {
+    const open = root.querySelector(`[data-detail-of="${b.dataset.detail}"]`).classList.toggle('hidden') === false;
     b.textContent = open ? '收起 ▴' : '展开明细 ▾';
   });
-  select('top');
+  return picker;
 }
-// 某个分组勾选框管辖的区域勾选框
-const groupRegs = g => $$('.reg').filter(c => (!g.dataset.prov || c.dataset.prov === g.dataset.prov) && (!g.dataset.cont || c.dataset.cont === g.dataset.cont));
-// 分组勾选框随区域勾选同步：全选 = 勾上，部分 = 半选，全不选 = 空；并更新"已选/总数"
-function syncGroups() {
-  $$('.grp').forEach(g => {
-    const rs = groupRegs(g), n = rs.filter(c => c.checked).length;
-    g.checked = n === rs.length; g.indeterminate = n > 0 && n < rs.length;
-    const cnt = g.parentElement.querySelector('.cnt'); if (cnt) cnt.textContent = `${n}/${rs.length}`;
-  });
+// 预计耗时：每个目标每轮约 0.35 秒，路径追踪约多 75 秒
+function estimateText(regionCount, rounds, trace) {
+  const n = regionCount + INFO.references.length, sec = Math.ceil(n * rounds * 0.35 + (trace ? 75 : 0));
+  return `共 ${n} 个目标，预计约 ${sec < 90 ? sec + ' 秒' : Math.ceil(sec / 60) + ' 分钟'}`;
 }
-function onRegionsChanged() { syncGroups(); updateEstimate(); }
-function select(mode) {
-  $$('.reg').forEach(c => c.checked = mode === 'all' ? true : mode === 'none' ? false : TOP.includes(c.value));
-  onRegionsChanged();
-}
-$$('[data-sel]').forEach(b => b.onclick = () => select(b.dataset.sel));
-function updateEstimate() {
-  const n = $$('.reg:checked').length + INFO.references.length, k = +$('#rounds').value || 12;
-  const sec = Math.ceil(n * k * 0.35 + ($('#trace').checked ? 75 : 0));
-  $('#estimate').textContent = `共 ${n} 个目标，预计约 ${sec < 90 ? sec + ' 秒' : Math.ceil(sec / 60) + ' 分钟'}`;
-}
+let runPicker = null, scPicker = null;
+function updateEstimate() { $('#estimate').textContent = estimateText(runPicker.get().length, +$('#rounds').value || 12, $('#trace').checked); }
 $('#rounds').oninput = updateEstimate; $('#trace').onchange = updateEstimate;
 
 let pollTimer = null;
 $('#btnRun').onclick = async () => {
-  const regions = $$('.reg:checked').map(c => c.value);
+  const regions = runPicker.get();
   if (!regions.length && !confirm('没有选择区域，只测对照组？')) return;
   // 点击后立即给出反馈并锁住按钮，防止重复点击
   const btn = $('#btnRun'); btn.disabled = true; btn.textContent = '正在启动…';
@@ -521,6 +530,15 @@ $$('[data-hours]').forEach(b => b.onclick = () => {
 });
 const RESULT = { 0: '成功', 1: '出错（退出码 1）', 267009: '正在运行', 267011: '尚未运行过', 267014: '被手动停止', 2147750687: '上一次还没结束，本次跳过' };
 const STATE = { Ready: '已启用，等待下次运行', Running: '正在运行', Disabled: '已暂停（不会自动运行）', Queued: '排队中' };
+// 已保存的定时区域：['all'] = 全部（以后新增的区域也会自动包含）
+const scCodes = c => c.regions.includes('all') ? INFO.regions.map(r => r.code) : INFO.regions.map(r => r.code).filter(x => c.regions.includes(x));
+function scRegionsText(c) {
+  const codes = scCodes(c), by = p => INFO.regions.filter(r => r.provider === p && codes.includes(r.code)).length;
+  const head = c.regions.includes('all') ? `全部 ${codes.length} 个区域` : `${codes.length} 个区域（${[...new Set(INFO.regions.map(r => r.provider))].map(p => `${p} ${by(p)}`).join(' · ')}）`;
+  return `${head}，${c.trace ? '追踪路径' : '不追踪路径'}；${estimateText(codes.length, 12, c.trace)}`;
+}
+function updateScEstimate() { $('#scEstimate').textContent = '每次' + estimateText(scPicker.get().length, 12, $('#scTrace').checked); }
+$('#scTrace').onchange = updateScEstimate;
 async function loadSchedule(quiet) {
   let s; try { s = await api('/api/schedule'); } catch (e) { return; }
   SC = s;
@@ -534,6 +552,7 @@ async function loadSchedule(quiet) {
       ['下次运行', s.state === 'Disabled' ? '<span class="muted">已暂停</span>' : (s.nextRun || '-')],
       ['上次运行', s.lastRun ? `${s.lastRun}（${lr}）` : '尚未运行过'],
       ['运行时间点', `每天 ${s.times.length} 次：${s.times.join(' ')}`],
+      ['测速区域', scRegionsText(s.config)],
       ['运行方式', s.logonType === 'S4U' ? '不登录也运行（S4U）' : '只在登录 Windows 时运行'],
     ] : [['说明', '尚未安装。在下方选好时间后点「保存并安装」。']]),
     ...(s.installed && !s.samePath ? [['⚠ 注意', '<span style="color:var(--bad)">这个任务运行的是另一个文件夹里的程序。点「保存并安装」可改为当前文件夹。</span>']] : []),
@@ -545,6 +564,8 @@ async function loadSchedule(quiet) {
     const times = s.installed && s.samePath ? s.times : s.config.times;
     $$('.sch').forEach(c => c.checked = times.includes(c.value)); paintHours();
     $('#scDelay').value = s.config.delay;
+    $('#scTrace').checked = s.config.trace;
+    scPicker.set(scCodes(s.config));
   }
   const lt = s.config.logonType;
   $('#scLogon').innerHTML = (lt === 'S4U'
@@ -566,16 +587,18 @@ async function scAction(action, confirmText) {
 }
 $('#scRefresh').onclick = () => loadSchedule();
 $('#scToggle').onclick = () => scAction(SC.state === 'Disabled' ? 'enable' : 'disable');
-$('#scRunNow').onclick = () => scAction('runnow', '现在让定时任务在后台测一次（测全部区域约 6~8 分钟，结果写入数据文件）？\n运行期间网页上的「开始测速」暂时不可用。');
+$('#scRunNow').onclick = () => scAction('runnow', `现在让定时任务在后台测一次？\n按已保存的设置：${scRegionsText(SC.config)}。结果写入数据文件。\n运行期间网页上的「开始测速」暂时不可用。`);
 $('#scUninstall').onclick = () => scAction('uninstall', '卸载定时任务？之后不再自动测速，已有数据保留。需要时可以重新「保存并安装」。');
 $('#scSave').onclick = async () => {
   const times = $$('.sch:checked').map(c => c.value);
   if (!times.length) { alert('请至少勾选一个时间点'); return; }
+  const regions = scPicker.isAll() ? ['all'] : scPicker.get();
+  if (!regions.length) { alert('请在「定时测哪些区域」里至少勾选一个区域'); return; }
   $('#scSave').disabled = true; $('#scSave').textContent = '正在安装…';
   try {
-    const r = await api('/api/schedule/save', { method: 'POST', body: JSON.stringify({ times, delay: +$('#scDelay').value || 0, enabled: !SC || SC.state !== 'Disabled' }) });
+    const r = await api('/api/schedule/save', { method: 'POST', body: JSON.stringify({ times, delay: +$('#scDelay').value || 0, regions, trace: $('#scTrace').checked, enabled: !SC || SC.state !== 'Disabled' }) });
     $('#scOut').textContent = r.output || ''; $('#scOutWrap').classList.remove('hidden'); $('#scOutWrap').open = !r.ok;
-    alert(r.ok ? `已保存：每天 ${times.length} 次。` : '安装失败：' + (r.message || '') + '\n详见「安装输出」。');
+    alert(r.ok ? `已保存：每天 ${times.length} 次，${regions[0] === 'all' ? '全部' : regions.length + ' 个'}区域。` : '安装失败：' + (r.message || '') + '\n详见「安装输出」。');
   } finally { $('#scSave').disabled = false; $('#scSave').textContent = '保存并安装'; loadSchedule(); }
 };
 
@@ -641,7 +664,8 @@ function afterDataChange() { $('#dtRegion').length = 1; trSelected = null; loadD
     INFO = await api('/api/info');
     $('#site').textContent = INFO.label ? '— ' + INFO.label : '';
     document.title = '云区域测速 - ' + INFO.label;
-    renderRegionPicker();
+    runPicker = makeRegionPicker($('#runPicker'), updateEstimate); runPicker.select('top');
+    scPicker = makeRegionPicker($('#scPicker'), updateScEstimate);
     await loadData();
     const s = await api('/api/status');
     if (s.hasRun && s.running) startPolling();

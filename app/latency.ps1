@@ -6,6 +6,7 @@
     测速 + 路径：         ... -File latency.ps1 -Trace
     命令行汇总报告：      ... -File latency.ps1 -Report
     只测部分区域：        ... -File latency.ps1 -Regions ap-osaka-1,azure-southeastasia,aws-ap-northeast-1
+    测全部内置区域：      ... -File latency.ps1 -Regions all
     每个区域测更多次：    ... -File latency.ps1 -Rounds 20
     列出全部区域(JSON)：  ... -File latency.ps1 -ListRegions
 
@@ -295,6 +296,7 @@ foreach ($k in $Reference.Keys) {
 $list = if ($Regions) { $Regions -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } }
         elseif ($DefaultRegions.Count) { $DefaultRegions }
         else { @($Catalog.Keys) }
+if ($list -contains 'all') { $list = @($Catalog.Keys) }   # -Regions all = 全部内置区域
 foreach ($r in $list) {
     if (-not $Catalog.Contains($r)) { Write-Warning "未知区域代码 $r，跳过"; continue }
     try { $targets[$r] = Resolve-Target "$($Catalog[$r].Host):443" } catch { Write-Warning "$r 解析失败，跳过" }
