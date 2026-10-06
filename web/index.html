@@ -58,6 +58,22 @@ td.num,th.num{text-align:right}
 .chart{width:100%;height:460px}
 .path{font-size:12px;color:var(--muted);white-space:normal}
 .hidden{display:none}
+.schedbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;margin-bottom:12px;border-radius:10px;font-size:13px;color:var(--muted);background:var(--card);border:1px solid var(--line)}
+.schedbar.running,.sclive.running{color:var(--fg);background:color-mix(in srgb,var(--accent) 12%,var(--card));border:1px solid var(--accent)}
+.schedbar.running{font-size:14px}
+.schedbar .linkbtn{margin-left:auto}
+.sclive{padding:12px 14px;margin-bottom:12px;border-radius:10px;border:1px solid var(--line);background:var(--chip)}
+.sclive.paused{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--card))}
+.sclive b{font-size:15px}
+.sclive .progress{margin:8px 0 2px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);margin-right:6px;vertical-align:1px}
+.running .dot{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+.badge{display:inline-block;font-size:12px;padding:0 8px;border-radius:10px;white-space:nowrap}
+.badge.ok{background:color-mix(in srgb,var(--good) 15%,var(--card));color:var(--good)}
+.badge.running{background:color-mix(in srgb,var(--accent) 15%,var(--card));color:var(--accent)}
+.badge.interrupted,.badge.error{background:color-mix(in srgb,var(--bad) 13%,var(--card));color:var(--bad)}
+.badge.skipped{background:var(--chip);color:var(--muted)}
 .hours{display:grid;grid-template-columns:repeat(12,minmax(48px,1fr));gap:6px;margin:10px 0}
 .hours label{background:var(--chip);border-radius:8px;padding:6px 0;text-align:center;cursor:pointer;user-select:none;font-size:13px}
 .hours label.on{background:var(--accent);color:#fff}
@@ -84,6 +100,7 @@ dl.kv dd{margin:0}
   </nav>
 </header>
 <main>
+<div id="schedBar" class="schedbar hidden"></div>
 <!-- 执行测速 -->
 <section id="tab-run">
   <div class="card">
@@ -166,6 +183,7 @@ dl.kv dd{margin:0}
 <section id="tab-schedule" class="hidden">
   <div class="card">
     <h2>当前状态 <button class="btn" id="scRefresh" style="margin-left:8px;font-size:12px;padding:3px 10px">刷新</button></h2>
+    <div id="scLive" class="sclive hidden"></div>
     <dl class="kv" id="scStatus"></dl>
     <div class="row" style="margin-top:14px">
       <button class="btn" id="scToggle">暂停</button>
@@ -173,6 +191,12 @@ dl.kv dd{margin:0}
       <button class="btn danger" id="scUninstall">卸载定时任务</button>
       <span class="muted" id="scMsg"></span>
     </div>
+  </div>
+  <div class="card">
+    <h2>运行记录 <span class="muted" style="font-weight:normal;font-size:13px">（来自 data\logs 下的月度日志，显示本月和上月；在「数据管理」清理旧日志后，更早的记录也会消失）</span></h2>
+    <div id="scSummary" class="muted"></div>
+    <div class="tablewrap"><table id="scHistory"></table></div>
+    <button class="linkbtn hidden" id="scMore" style="margin:8px 0 0">显示全部记录</button>
   </div>
   <div class="card">
     <h2>定时测哪些区域 <span class="muted" style="font-weight:normal;font-size:13px">（对照组每次都会测；和下方运行时间一起「保存并安装」后生效）</span></h2>
@@ -283,7 +307,8 @@ addEventListener('resize', () => Object.values(charts).forEach(c => c.resize()))
 $$('nav button').forEach(b => b.onclick = () => {
   $$('nav button').forEach(x => x.classList.toggle('active', x === b));
   $$('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + b.dataset.tab));
-  ({ overview: renderOverview, trend: renderTrend, detail: renderDetail, schedule: loadSchedule, data: loadDataMgmt })[b.dataset.tab]?.();
+  ({ overview: renderOverview, trend: renderTrend, detail: renderDetail, schedule: () => { loadSchedule(); loadHistory(); }, data: loadDataMgmt })[b.dataset.tab]?.();
+  if (INFO) refreshLive();   // 切换页面时更新顶部的定时测速状态条
   clearInterval(scTimer); if (b.dataset.tab === 'schedule') scTimer = setInterval(() => loadSchedule(true), 5000);
   setTimeout(() => Object.values(charts).forEach(c => c.resize()), 50);
 });
@@ -372,7 +397,7 @@ function startPolling() { clearInterval(pollTimer); pollTimer = setInterval(poll
 async function poll() {
   const s = await api('/api/status');
   if (!s.hasRun) return;
-  $('#btnRun').disabled = s.running; $('#btnStop').classList.toggle('hidden', !s.running);
+  webRunning = s.running; syncRunBtn(); $('#btnStop').classList.toggle('hidden', !s.running);
   $('#log').textContent = s.log + (s.error ? '\n[错误输出]\n' + s.error : '');
   let pct = 0, msg = '';
   if (s.running) {
@@ -581,9 +606,10 @@ async function scAction(action, confirmText) {
   try { r = await api('/api/schedule/action', { method: 'POST', body: JSON.stringify({ action }) }); }
   catch (e) { r = { ok: false, message: `请求失败（${e.message}），请确认测速网站的黑色命令行窗口没有关闭。` }; }
   await loadSchedule(true);   // 按最新状态恢复各按钮
+  refreshLive(); loadHistory();
   $('#scMsg').textContent = r.ok ? '' : r.message;
   if (!r.ok) alert(r.message);
-  setTimeout(() => loadSchedule(true), 800);
+  setTimeout(() => { loadSchedule(true); refreshLive(); }, 1500);
 }
 $('#scRefresh').onclick = () => loadSchedule();
 $('#scToggle').onclick = () => scAction(SC.state === 'Disabled' ? 'enable' : 'disable');
@@ -601,6 +627,69 @@ $('#scSave').onclick = async () => {
     alert(r.ok ? `已保存：每天 ${times.length} 次，${regions[0] === 'all' ? '全部' : regions.length + ' 个'}区域。` : '安装失败：' + (r.message || '') + '\n详见「安装输出」。');
   } finally { $('#scSave').disabled = false; $('#scSave').textContent = '保存并安装'; loadSchedule(); }
 };
+
+// ---------- 定时测速：实时状态（所有页面顶部的状态条 + 定时任务页的状态横幅）和运行记录 ----------
+let webRunning = false, schedRunning = false, liveTimer = null, histLimit = 30;
+// 定时任务正在测速时，网页测速无法开始（后台会拒绝），直接把按钮锁住并说明原因
+function syncRunBtn() {
+  const b = $('#btnRun'); b.disabled = webRunning || schedRunning;
+  b.title = schedRunning && !webRunning ? '定时任务正在后台测速，结束后才能开始网页测速' : '';
+}
+const fmtDur = sec => sec == null ? '-' : sec < 60 ? `${sec} 秒` : `${Math.floor(sec / 60)} 分 ${sec % 60} 秒`;
+const minsUntil = t => Math.round((new Date(t.replace(' ', 'T')) - new Date()) / 60000);
+function liveText(l) {
+  if (!l.installed) return null;
+  if (l.state === 'Running') {
+    const r = l.run || {}, el = r.elapsed || 0;
+    const step = r.phase === 'trace' ? '追踪路由并查询沿途 IP 归属（最后一步）'
+      : r.phase === 'measure' ? (r.roundsTotal ? `测延迟：第 ${r.roundsDone} / ${r.roundsTotal} 轮` : '测延迟中')
+      : '正在准备（解析各区域地址）';
+    const left = r.avgSec ? r.avgSec - el : null;
+    const eta = left == null ? '' : left > 60 ? `，预计还需约 ${Math.ceil(left / 60)} 分钟` : left > 5 ? `，预计还需约 ${left} 秒` : left > -120 ? '，即将完成' : '，比平时慢，请稍候';
+    const pct = r.avgSec ? Math.min(98, Math.round(el / r.avgSec * 100))
+      : r.phase === 'trace' ? 90 : r.roundsTotal ? Math.round(r.roundsDone / r.roundsTotal * 80) : 3;
+    return { cls: 'running', pct, head: '定时任务正在后台测速',
+      body: `${r.targets ? r.targets + ' 个目标 · ' : ''}${step} · 已运行 ${fmtDur(el)}${eta}。测速期间无法开始网页测速，结果在全部完成后一次写入。` };
+  }
+  if (l.state === 'Queued') return { cls: 'waiting', head: '定时任务排队中', body: '任务计划已经触发，正在等待启动（电脑刚唤醒时常见）。' };
+  if (l.state === 'Disabled') return { cls: 'paused', head: '定时任务已暂停', body: '不会自动测速。在「定时任务」页点「启用」可恢复。' };
+  if (!l.nextRun) return { cls: 'waiting', head: '定时任务等待中', body: '没有查到下次运行时间。' };
+  const m = minsUntil(l.nextRun), when = m <= 0 ? '即将开始' : m < 60 ? `约 ${m} 分钟后` : `约 ${Math.floor(m / 60)} 小时 ${m % 60} 分钟后`;
+  return { cls: 'waiting', head: '定时任务等待中', body: `下次测速：${l.nextRun}（${when}）。` };
+}
+async function refreshLive() {
+  clearTimeout(liveTimer);
+  let l; try { l = await api('/api/schedule/live'); } catch (e) { liveTimer = setTimeout(refreshLive, 30000); return; }
+  const was = schedRunning; schedRunning = l.state === 'Running'; syncRunBtn();
+  const t = liveText(l), bar = $('#schedBar'), box = $('#scLive');
+  // 顶部状态条：测速中醒目显示；等待中只显示一行小字；暂停 / 未安装时不显示；定时任务页有自己的状态横幅，也不显示
+  const onSchedTab = !$('#tab-schedule').classList.contains('hidden');
+  bar.classList.toggle('hidden', !t || t.cls === 'paused' || onSchedTab);
+  if (t) {
+    bar.className = 'schedbar ' + t.cls + (t.cls === 'paused' || onSchedTab ? ' hidden' : '');
+    bar.innerHTML = t.cls === 'running' ? `<span class="dot"></span><b>${t.head}</b><span>${t.body}</span><button class="linkbtn" data-goto="schedule">查看</button>`
+      : `<span>⏱ ${t.body.replace('下次测速', '下次定时测速')}</span>`;
+    box.className = 'sclive ' + t.cls;
+    box.innerHTML = `<b>${t.cls === 'running' ? '<span class="dot"></span>' : ''}${t.head}</b><div>${t.body}</div>` +
+      (t.pct != null ? `<div class="progress"><div style="width:${t.pct}%"></div></div>` : '');
+  } else box.className = 'sclive hidden';
+  $$('[data-goto]').forEach(b => b.onclick = () => $(`nav [data-tab="${b.dataset.goto}"]`).click());
+  // 一次定时测速刚结束：刷新运行记录和数据
+  if (was && !schedRunning) { loadHistory(); loadSchedule(true); loadData().catch(() => {}); }
+  liveTimer = setTimeout(refreshLive, schedRunning ? 5000 : 30000);
+}
+const ST_TEXT = { ok: '成功', running: '运行中', interrupted: '中断', error: '出错', skipped: '跳过' };
+async function loadHistory() {
+  let h; try { h = await api('/api/schedule/history?limit=' + histLimit); } catch (e) { return; }
+  const part = (c, label) => `${label}：成功 ${c.ok}` + [['interrupted', '中断'], ['error', '出错'], ['skipped', '跳过']].filter(([k]) => c[k]).map(([k, n]) => ` · <span style="color:${k === 'skipped' ? 'var(--muted)' : 'var(--bad)'}">${n} ${c[k]}</span>`).join('');
+  $('#scSummary').innerHTML = h.total ? `${part(h.today, '今天')}；${part(h.week, '近 7 天')}${h.avgSec ? `；测 ${h.avgTargets} 个目标平均用时 ${fmtDur(h.avgSec)}` : ''}` : '还没有定时测速的运行记录。';
+  $('#scHistory').innerHTML = h.runs.length ? '<tr><th>开始时间</th><th>结果</th><th class="num">用时</th><th class="num">目标数</th><th>说明</th></tr>' +
+    h.runs.map(r => `<tr><td>${esc(r.start)}</td><td><span class="badge ${r.status}">${ST_TEXT[r.status] || r.status}</span></td><td class="num">${r.status === 'ok' || r.status === 'error' ? fmtDur(r.seconds) : '-'}</td><td class="num">${r.targets ?? '-'}</td>` +
+      `<td>${esc([r.note, r.warnings ? `${r.warnings} 个区域地址解析失败，已跳过` : '', r.status === 'ok' && !r.trace ? '未追踪路径' : ''].filter(Boolean).join('；'))}</td></tr>`).join('') : '';
+  $('#scMore').classList.toggle('hidden', h.total <= h.runs.length);
+  $('#scMore').textContent = `显示全部 ${h.total} 条记录`;
+}
+$('#scMore').onclick = () => { histLimit = 1000; loadHistory(); };
 
 // ---------- 数据管理 ----------
 let DM = null;
@@ -666,6 +755,7 @@ function afterDataChange() { $('#dtRegion').length = 1; trSelected = null; loadD
     document.title = '云区域测速 - ' + INFO.label;
     runPicker = makeRegionPicker($('#runPicker'), updateEstimate); runPicker.select('top');
     scPicker = makeRegionPicker($('#scPicker'), updateScEstimate);
+    refreshLive();
     await loadData();
     const s = await api('/api/status');
     if (s.hasRun && s.running) startPolling();

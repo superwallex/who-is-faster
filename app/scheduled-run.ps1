@@ -26,6 +26,7 @@ try {
     Write-Host ("===== 定时测速开始 {0:yyyy-MM-dd HH:mm:ss} =====" -f (Get-Date))
     # 测哪些区域、是否追踪路径：测速网站"定时任务"页保存在 config\schedule.json；
     # 没保存过时不传 -Regions（按 config.psd1 的 Regions，留空 = 全部区域），并追踪路径
+    $env:LATENCY_PROGRESS = '1'   # 日志里写"[进度] 第 N / M 轮"，测速网站据此显示定时测速进行到哪一步
     $runArgs = @{ Trace = $true }
     $override = Join-Path (Split-Path -Parent $Here) 'config\schedule.json'
     if (Test-Path $override) {

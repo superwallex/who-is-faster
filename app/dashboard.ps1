@@ -238,6 +238,113 @@ function Set-ScheduleState([string]$action) {
     }
 }
 
+# ---------- 定时测速的运行记录（来自 data\logs\yyyy-MM.log，由 scheduled-run.ps1 写入） ----------
+# 只读取标记行：开始 / 目标数 / 进入路径追踪 / 写入结果 / 出错 / 跳过 / 结束
+function Get-ScheduleRuns {
+    $files = @(Get-ChildItem $LogDir -Filter '????-??.log' -File -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 2)
+    $runs = New-Object System.Collections.ArrayList; $cur = $null
+    $pat = '定时测速开始|定时测速结束|开始测速：|等待路由追踪|结果已追加|运行出错|跳过：|解析失败'
+    foreach ($f in $files) {
+        foreach ($m in (Select-String -LiteralPath $f.FullName -Pattern $pat -Encoding UTF8)) {
+            $l = $m.Line
+            if ($l -match '===== 定时测速开始 (\S+ \S+) =====') {
+                if ($cur) { [void]$runs.Add($cur) }   # 上一次没有结束行：中途被中断
+                $cur = @{ start = $matches[1]; end = $null; targets = $null; trace = $false; ok = $false; error = ''; warnings = 0 }
+            }
+            elseif ($l -match '===== (\S+ \S+) 跳过：(.*?)=====') { [void]$runs.Add(@{ start = $matches[1]; skipped = $true; note = $matches[2].Trim() }) }
+            elseif (-not $cur) { continue }
+            elseif ($l -match '开始测速：(\d+) 个目标') { $cur.targets = [int]$matches[1] }
+            elseif ($l -match '等待路由追踪') { $cur.trace = $true }
+            elseif ($l -match '结果已追加') { $cur.ok = $true }
+            elseif ($l -match '运行出错[:：]\s*(.*)$') { $cur.error = $matches[1] }
+            elseif ($l -match '解析失败') { $cur.warnings++ }
+            elseif ($l -match '===== 定时测速结束 (\S+ \S+) =====') { $cur.end = $matches[1]; [void]$runs.Add($cur); $cur = $null }
+        }
+    }
+    if ($cur) { [void]$runs.Add($cur) }
+    @($runs | Sort-Object { $_.start })
+}
+
+# 每次运行的结果：ok 成功 / running 运行中 / interrupted 中断 / error 出错 / skipped 跳过
+function Get-ScheduleHistory([int]$limit = 30) {
+    $running = [bool](Get-ScheduledRunning)
+    $all = @(Get-ScheduleRuns)
+    $list = for ($i = 0; $i -lt $all.Count; $i++) {
+        $r = $all[$i]
+        $o = [ordered]@{ start = $r.start; end = $r.end; seconds = $null; targets = $r.targets; trace = $r.trace; warnings = $r.warnings; note = '' }
+        if ($r.end) { $o.seconds = [int]([datetime]$r.end - [datetime]$r.start).TotalSeconds }
+        if ($r.skipped) { $o.status = 'skipped'; $o.note = $r.note }
+        elseif ($r.end -and $r.ok) { $o.status = 'ok' }
+        elseif ($r.end) { $o.status = 'error'; $o.note = $(if ($r.error) { $r.error } else { '运行结束但没有写入结果，请查看日志' }) }
+        elseif ($running -and $i -eq $all.Count - 1) { $o.status = 'running' }
+        else { $o.status = 'interrupted'; $o.note = $(if ($r.trace) { '在追踪路径阶段' } else { '在测延迟阶段' }) + '中断：电脑睡眠 / 关机，或超过 30 分钟被系统终止；本次数据未保存' }
+        [pscustomobject]$o
+    }
+    $list = @($list)
+    $script:OkRuns = @($list | Where-Object { $_.status -eq 'ok' -and $_.targets } | Select-Object -Last 20); $script:AvgAt = Get-Date
+    $count = { param($since) $sel = @($list | Where-Object { [datetime]$_.start -ge $since }); [ordered]@{
+        ok = @($sel | Where-Object status -eq 'ok').Count; interrupted = @($sel | Where-Object status -eq 'interrupted').Count
+        error = @($sel | Where-Object status -eq 'error').Count; skipped = @($sel | Where-Object status -eq 'skipped').Count } }
+    [ordered]@{
+        total   = $list.Count
+        avgTargets = $(if ($script:OkRuns.Count) { $script:OkRuns[-1].targets } else { $null })
+        avgSec  = $(if ($script:OkRuns.Count) { Get-AvgSec $script:OkRuns[-1].targets } else { $null })   # 和最近一次相同目标数的运行平均用时（秒）
+        today   = (& $count (Get-Date).Date)
+        week    = (& $count (Get-Date).Date.AddDays(-6))
+        runs    = @($list | Select-Object -Last $limit | Sort-Object { $_.start } -Descending)
+    }
+}
+
+# 估计一次定时测速要多久（秒）：优先取目标数相同的最近 5 次成功运行的平均值；
+# 没有相同的就按"每个目标平均用时"折算；不指定目标数时取最近 5 次的平均
+function Get-AvgSec([int]$targets = 0) {
+    $ok = @($script:OkRuns); if (-not $ok.Count) { return $null }
+    $same = @($ok | Where-Object { $_.targets -eq $targets } | Select-Object -Last 5)
+    if ($same.Count) { return [int](($same | Measure-Object seconds -Average).Average) }
+    $last = @($ok | Select-Object -Last 5)
+    if ($targets -gt 0) { return [int]($targets * (($last | ForEach-Object { $_.seconds / $_.targets }) | Measure-Object -Average).Average) }
+    [int](($last | Measure-Object seconds -Average).Average)
+}
+
+# 读取正在写入的日志文件末尾（日志可能有几 MB，只读最后一段）
+function Read-Tail([string]$path, [int]$bytes = 131072) {
+    $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+    try {
+        if ($fs.Length -gt $bytes) { $fs.Seek(-$bytes, 'End') | Out-Null }
+        (New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8)).ReadToEnd()
+    } finally { $fs.Close() }
+}
+
+# 定时任务的实时状态（网页每隔几秒查询一次，必须很快）：等待中 / 排队 / 正在测速到哪一步
+function Get-ScheduleLive {
+    $r = [ordered]@{ installed = $false }
+    try { $t = Get-TaskCom } catch { $t = $null }
+    if (-not $t) { return $r }
+    $r.installed = $true
+    $r.state     = $TaskStates[[int]$t.State]
+    $r.nextRun   = Format-Time $t.NextRunTime
+    if ($r.state -ne 'Running') { return $r }
+    # 正在运行：从本月日志末尾找到这次运行的进度
+    $run = [ordered]@{ start = (Format-Time $t.LastRunTime); phase = 'start'; roundsDone = 0; roundsTotal = 0; targets = $null }
+    $log = Join-Path $LogDir ((Get-Date).ToString('yyyy-MM') + '.log')
+    if (Test-Path $log) {
+        $lines = (Read-Tail $log) -split "\r?\n"
+        $idx = -1; for ($i = $lines.Count - 1; $i -ge 0; $i--) { if ($lines[$i] -match '===== 定时测速开始 (\S+ \S+) =====') { $idx = $i; $run.start = $matches[1]; break } }
+        if ($idx -ge 0) {
+            foreach ($l in $lines[$idx..($lines.Count - 1)]) {
+                if ($l -match '开始测速：(\d+) 个目标') { $run.targets = [int]$matches[1]; $run.phase = 'measure' }
+                elseif ($l -match '^\[进度\] 第 (\d+) / (\d+) 轮') { $run.roundsDone = [int]$matches[1]; $run.roundsTotal = [int]$matches[2] }
+                elseif ($l -match '等待路由追踪') { $run.phase = 'trace' }
+            }
+        }
+    }
+    if ($run.start) { $run.elapsed = [int]((Get-Date) - [datetime]$run.start).TotalSeconds }
+    if (-not $script:AvgAt -or ((Get-Date) - $script:AvgAt).TotalMinutes -gt 30) { $null = Get-ScheduleHistory 1 }
+    $run.avgSec = Get-AvgSec $run.targets
+    $r.run = $run
+    $r
+}
+
 # ---------- 数据管理 ----------
 function Get-BusyReason {
     if ($script:Run -and -not $script:Run.Proc.HasExited) { return '网页测速正在运行' }
@@ -329,6 +436,8 @@ function Handle($ctx) {
             'POST /api/run'   { Send-Json $ctx (Start-WebRun (Read-Body $req)); return }
             'POST /api/stop'  { Send-Json $ctx (Stop-WebRun); return }
             'GET /api/schedule'          { Send-Json $ctx (Get-ScheduleInfo); return }
+            'GET /api/schedule/live'     { Send-Json $ctx (Get-ScheduleLive); return }
+            'GET /api/schedule/history'  { $n = [int]"0$($req.QueryString['limit'])"; Send-Json $ctx (Get-ScheduleHistory $(if ($n -gt 0) { $n } else { 30 })); return }
             'POST /api/schedule/save'    { Send-Json $ctx (Save-Schedule (Read-Body $req)); return }
             'POST /api/schedule/action'  { Send-Json $ctx (Set-ScheduleState "$((Read-Body $req).action)"); return }
             'GET /api/data/stats'        { Send-Json $ctx (Get-DataStats); return }
