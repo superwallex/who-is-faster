@@ -55,10 +55,25 @@ function Read-Shared([string]$path) {
     try { (New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8, $true)).ReadToEnd() } finally { $fs.Close() }
 }
 
+# 定时任务一律通过任务计划 COM 接口读写（约 20 毫秒）；Get-ScheduledTask 等命令每次要 2 秒多，会让网页按钮卡住。
+# 任务未安装时返回 $null；COM 接口不可用时抛出异常，调用处退回原来的命令。
+function Get-TaskCom {
+    $svc = New-Object -ComObject Schedule.Service; $svc.Connect()
+    try { $svc.GetFolder('\').GetTask($TaskName) } catch { $null }
+}
+$TaskStates = @{ 0 = 'Unknown'; 1 = 'Disabled'; 2 = 'Queued'; 3 = 'Ready'; 4 = 'Running' }
+$LogonTypes = @{ 0 = 'None'; 1 = 'Password'; 2 = 'S4U'; 3 = 'Interactive'; 4 = 'Group'; 5 = 'ServiceAccount'; 6 = 'InteractiveOrPassword' }
+
 function Get-ScheduledRunning {
-    $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if ($t -and $t.State -eq 'Running') { return $TaskName }
-    return $null
+    try {
+        $t = Get-TaskCom
+        if ($t -and $t.State -eq 4) { return $TaskName }
+        return $null
+    } catch {
+        $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($t -and $t.State -eq 'Running') { return $TaskName }
+        return $null
+    }
 }
 
 function Get-RunStatus {
@@ -137,6 +152,22 @@ function Get-ScheduleConfig {
 
 function Get-ScheduleInfo {
     $r = @{ taskName = $TaskName; config = (Get-ScheduleConfig); isAdmin = (Test-Admin); installed = $false }
+    try { $t = Get-TaskCom } catch { $t = $false }
+    if ($t) {
+        $d = $t.Definition
+        $r.installed  = $true
+        $r.state      = $TaskStates[[int]$t.State]
+        $r.enabled    = [bool]$t.Enabled
+        $r.nextRun    = Format-Time $t.NextRunTime
+        $r.lastRun    = Format-Time $t.LastRunTime
+        $r.lastResult = $t.LastTaskResult
+        $r.times      = @(@(foreach ($tr in $d.Triggers) { ([datetime]$tr.StartBoundary).ToString('HH:mm') }) | Sort-Object)
+        $r.logonType  = $LogonTypes[[int]$d.Principal.LogonType]
+        $r.samePath   = "$(@($d.Actions)[0].Arguments)".ToLower().Contains($Root.ToLower())
+        return $r
+    }
+    if ($null -eq $t) { return $r }   # COM 正常，任务未安装
+    # COM 接口不可用：退回原来的命令
     $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($t) {
         $i = Get-ScheduledTaskInfo -TaskName $TaskName
@@ -160,21 +191,33 @@ function Save-Schedule($body) {
     @{ Times = $times; RandomDelayMinutes = $delay } | ConvertTo-Json | Set-Content $ScheduleOverride -Encoding UTF8
     try { $out = (& $InstallScript *>&1 | Out-String).Trim() } catch { $out = "$($_.Exception.Message)" }
     if ($out -match 'Access is denied|拒绝访问|0x80070005') { $out += "`n权限不足：请右键「启动测速网站.cmd」→「以管理员身份运行」后再保存" }
-    $ok = [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) -and ($out -match '已安装定时任务')
-    if ($ok -and $body.enabled -eq $false) { Disable-ScheduledTask -TaskName $TaskName | Out-Null }
+    try { $t = Get-TaskCom } catch { $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
+    $ok = [bool]$t -and ($out -match '已安装定时任务')
+    if ($ok -and $body.enabled -eq $false) { $null = Set-ScheduleState 'disable' }
     @{ ok = $ok; output = $out; message = $(if ($ok) { '已保存并安装' } else { '安装失败，请查看输出' }) }
 }
 
 function Set-ScheduleState([string]$action) {
+    if ($action -notin 'enable', 'disable', 'runnow', 'uninstall') { return @{ ok = $false; message = '未知操作' } }
+    if ($action -eq 'runnow' -and $script:Run -and -not $script:Run.Proc.HasExited) { return @{ ok = $false; message = '网页测速正在运行，请等它结束' } }
     try {
-        switch ($action) {
-            'enable'    { Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null }
-            'disable'   { Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null }
-            'runnow'    {
-                if ($script:Run -and -not $script:Run.Proc.HasExited) { return @{ ok = $false; message = '网页测速正在运行，请等它结束' } }
-                Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop }
-            'uninstall' { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop }
-            default     { return @{ ok = $false; message = '未知操作' } }
+        $com = $true
+        try { $t = Get-TaskCom } catch { $com = $false }
+        if ($com) {
+            if (-not $t) { return @{ ok = $false; message = '定时任务未安装' } }
+            switch ($action) {
+                'enable'    { $t.Enabled = $true }
+                'disable'   { $t.Enabled = $false }
+                'runnow'    { $null = $t.Run($null) }
+                'uninstall' { $svc = New-Object -ComObject Schedule.Service; $svc.Connect(); $svc.GetFolder('\').DeleteTask($TaskName, 0) }
+            }
+        } else {   # COM 接口不可用：退回原来的命令
+            switch ($action) {
+                'enable'    { Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null }
+                'disable'   { Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null }
+                'runnow'    { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop }
+                'uninstall' { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop }
+            }
         }
         @{ ok = $true }
     } catch {

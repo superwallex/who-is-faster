@@ -31,6 +31,18 @@ select,input[type=number],input[type=text]{background:var(--card);color:var(--fg
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .chips label{background:var(--chip);border-radius:16px;padding:3px 10px;cursor:pointer;user-select:none;font-size:13px}
 .chips input{margin-right:4px}
+.selrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+.selrow .chips{margin-top:0}
+#contBar{padding-bottom:8px;margin-bottom:2px;border-bottom:1px dashed var(--line)}
+.selname{min-width:118px;cursor:pointer;user-select:none;white-space:nowrap}
+.selname input{margin-right:6px}
+.cnt{color:var(--muted);font-size:12px;margin-left:3px}
+.linkbtn{background:none;border:0;color:var(--accent);cursor:pointer;font-size:13px;padding:3px 4px;margin-left:auto}
+.provdetail{margin:6px 0 10px 24px;padding:4px 0 4px 12px;border-left:2px solid var(--line)}
+.controw{display:flex;gap:8px;margin:4px 0}
+.contname{flex:0 0 64px;color:var(--muted);font-size:12px;padding-top:7px;cursor:pointer;user-select:none;white-space:nowrap}
+.contname input{margin-right:4px}
+.controw .chips{flex:1}
 .progress{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:10px 0}
 .progress div{height:100%;background:var(--accent);width:0;transition:width .5s}
 pre.log{background:#0b0d12;color:#cbd5e1;padding:12px;border-radius:8px;max-height:260px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:0}
@@ -79,9 +91,9 @@ dl.kv dd{margin:0}
     <div class="row">
       <button class="btn" data-sel="all">全选</button>
       <button class="btn" data-sel="none">清空</button>
-      <button class="btn" data-sel="asia">亚洲区域</button>
       <button class="btn" data-sel="top">常用对比</button>
     </div>
+    <div class="selrow" id="contBar"></div>
     <div id="regionGroups"></div>
     <div class="row" style="margin-top:12px">
       <label>每个区域测 <input type="number" id="rounds" value="12" min="1" max="50" style="width:64px"> 次</label>
@@ -276,19 +288,52 @@ $$('nav button').forEach(b => b.onclick = () => {
 
 // ---------- 执行测速 ----------
 const TOP = ['ap-chuncheon-1', 'ap-osaka-1', 'ap-tokyo-1', 'azure-southeastasia', 'azure-malaysiawest', 'azure-japaneast', 'azure-eastasia', 'aws-ap-northeast-1', 'aws-ap-east-1', 'aws-ap-southeast-1', 'aws-ap-northeast-2'];
+// 大洲的显示顺序（区域属于哪个洲由 app\latency.ps1 的 Get-Continent 决定）
+const CONTS = ['亚洲', '大洋洲', '北美', '南美', '欧洲', '中东', '非洲', '其他'];
+const byCont = (a, b) => CONTS.indexOf(a) - CONTS.indexOf(b);
+// 分组勾选框：厂商 / 大洲 / 厂商+大洲；后面的 .cnt 显示"已选/总数"
+const grpBox = (label, prov, cont) =>
+  `<input type="checkbox" class="grp"${prov ? ` data-prov="${prov}"` : ''}${cont ? ` data-cont="${cont}"` : ''}>${label}<span class="cnt"></span>`;
 function renderRegionPicker() {
-  const groups = {};
-  INFO.regions.forEach(r => (groups[r.provider] ||= []).push(r));
-  $('#regionGroups').innerHTML = `<div class="group"><b>对照组</b> <span class="muted">${INFO.references.map(esc).join('、') || '（无，可在 config\\config.psd1 的 Reference 中添加自己的服务器）'}</span></div>` +
-    Object.entries(groups).map(([p, list]) => `<div class="group"><b>${p}</b> <span class="muted">(${list.length})</span>
-      <div class="chips">${list.map(r => `<label><input type="checkbox" class="reg" value="${r.code}">${esc(r.name)}</label>`).join('')}</div></div>`).join('');
-  $$('.reg').forEach(c => c.onchange = updateEstimate);
+  const regs = INFO.regions.map(r => ({ ...r, continent: r.continent || '其他' }));
+  const provs = [...new Set(regs.map(r => r.provider))];
+  const contsOf = list => [...new Set(list.map(r => r.continent))].sort(byCont);
+  // 顶部：跨厂商按大洲选
+  $('#contBar').innerHTML = '<span class="selname muted">按大洲</span><div class="chips">' +
+    contsOf(regs).map(c => `<label>${grpBox(c, '', c)}</label>`).join('') + '</div>';
+  // 每家厂商一行摘要（厂商 + 各大洲开关），区域明细默认收起
+  $('#regionGroups').innerHTML = provs.map(p => {
+    const list = regs.filter(r => r.provider === p);
+    return `<div class="selrow"><label class="selname">${grpBox(`<b>${p}</b>`, p)}</label>
+      <div class="chips">${contsOf(list).map(c => `<label>${grpBox(c, p, c)}</label>`).join('')}</div>
+      <button class="linkbtn" data-detail="${p}">展开明细 ▾</button></div>
+      <div class="provdetail hidden" data-detail-of="${p}">${contsOf(list).map(c => `<div class="controw"><label class="contname"><input type="checkbox" class="grp" data-prov="${p}" data-cont="${c}">${c}</label><div class="chips">` +
+        list.filter(r => r.continent === c).map(r => `<label><input type="checkbox" class="reg" value="${r.code}" data-prov="${p}" data-cont="${c}">${esc(r.name.replace(p + ' ', ''))}</label>`).join('') +
+        '</div></div>').join('')}</div>`;
+  }).join('') +
+    `<div class="selrow"><b class="selname">对照组</b><span class="muted">${INFO.references.map(esc).join('、') || '（无，可在 config\\config.psd1 的 Reference 中添加自己的服务器）'}</span></div>`;
+  $$('.reg').forEach(c => c.onchange = onRegionsChanged);
+  $$('.grp').forEach(g => g.onchange = () => { groupRegs(g).forEach(c => c.checked = g.checked); onRegionsChanged(); });
+  $$('[data-detail]').forEach(b => b.onclick = () => {
+    const d = $(`[data-detail-of="${b.dataset.detail}"]`), open = d.classList.toggle('hidden') === false;
+    b.textContent = open ? '收起 ▴' : '展开明细 ▾';
+  });
   select('top');
 }
+// 某个分组勾选框管辖的区域勾选框
+const groupRegs = g => $$('.reg').filter(c => (!g.dataset.prov || c.dataset.prov === g.dataset.prov) && (!g.dataset.cont || c.dataset.cont === g.dataset.cont));
+// 分组勾选框随区域勾选同步：全选 = 勾上，部分 = 半选，全不选 = 空；并更新"已选/总数"
+function syncGroups() {
+  $$('.grp').forEach(g => {
+    const rs = groupRegs(g), n = rs.filter(c => c.checked).length;
+    g.checked = n === rs.length; g.indeterminate = n > 0 && n < rs.length;
+    const cnt = g.parentElement.querySelector('.cnt'); if (cnt) cnt.textContent = `${n}/${rs.length}`;
+  });
+}
+function onRegionsChanged() { syncGroups(); updateEstimate(); }
 function select(mode) {
-  $$('.reg').forEach(c => c.checked = mode === 'all' ? true : mode === 'none' ? false :
-    mode === 'asia' ? (/^(aws-)?ap-/.test(c.value) || c.value.startsWith('azure-')) : TOP.includes(c.value));
-  updateEstimate();
+  $$('.reg').forEach(c => c.checked = mode === 'all' ? true : mode === 'none' ? false : TOP.includes(c.value));
+  onRegionsChanged();
 }
 $$('[data-sel]').forEach(b => b.onclick = () => select(b.dataset.sel));
 function updateEstimate() {
@@ -302,8 +347,14 @@ let pollTimer = null;
 $('#btnRun').onclick = async () => {
   const regions = $$('.reg:checked').map(c => c.value);
   if (!regions.length && !confirm('没有选择区域，只测对照组？')) return;
-  const r = await api('/api/run', { method: 'POST', body: JSON.stringify({ regions, rounds: +$('#rounds').value || 12, trace: $('#trace').checked }) });
-  if (!r.ok) { alert(r.message); return; }
+  // 点击后立即给出反馈并锁住按钮，防止重复点击
+  const btn = $('#btnRun'); btn.disabled = true; btn.textContent = '正在启动…';
+  $('#runMsg').textContent = '正在启动测速…'; $('#bar').style.width = '1%';
+  let r;
+  try { r = await api('/api/run', { method: 'POST', body: JSON.stringify({ regions, rounds: +$('#rounds').value || 12, trace: $('#trace').checked }) }); }
+  catch (e) { r = { ok: false, message: `请求失败（${e.message}），请确认测速网站的黑色命令行窗口没有关闭。` }; }
+  btn.textContent = '开始测速';
+  if (!r.ok) { btn.disabled = false; $('#runMsg').textContent = '未启动：' + r.message; $('#bar').style.width = '0'; alert(r.message); return; }
   $('#resultCard').classList.add('hidden');
   startPolling();
 };
@@ -503,7 +554,12 @@ async function loadSchedule(quiet) {
 }
 async function scAction(action, confirmText) {
   if (confirmText && !confirm(confirmText)) return;
-  const r = await api('/api/schedule/action', { method: 'POST', body: JSON.stringify({ action }) });
+  const btns = ['#scToggle', '#scRunNow', '#scUninstall'].map(s => $(s));
+  btns.forEach(b => b.disabled = true); $('#scMsg').textContent = '正在处理…';
+  let r;
+  try { r = await api('/api/schedule/action', { method: 'POST', body: JSON.stringify({ action }) }); }
+  catch (e) { r = { ok: false, message: `请求失败（${e.message}），请确认测速网站的黑色命令行窗口没有关闭。` }; }
+  await loadSchedule(true);   // 按最新状态恢复各按钮
   $('#scMsg').textContent = r.ok ? '' : r.message;
   if (!r.ok) alert(r.message);
   setTimeout(() => loadSchedule(true), 800);

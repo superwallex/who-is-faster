@@ -65,10 +65,40 @@ $AwsRegions = [ordered]@{
     'eu-south-1'='意大利米兰'; 'eu-south-2'='西班牙'; 'eu-north-1'='瑞典斯德哥尔摩'
     'il-central-1'='以色列特拉维夫'; 'me-south-1'='巴林'; 'me-central-1'='阿联酋'; 'af-south-1'='南非开普敦'
 }
-$Catalog = [ordered]@{}   # 代码 -> @{ Name; Host; Provider }
+# 区域所属大洲（网站"执行测速"页按大洲分组用）：Oracle / AWS 按代码前缀判断，Azure 按区域名里的关键词判断；
+# 前缀判断不了的写在例外表里。新增区域只要符合这些规则，就不用改这里。
+$ContinentExceptions = @{
+    'ap-sydney-1'='大洋洲'; 'ap-melbourne-1'='大洋洲'
+    'aws-ap-southeast-2'='大洋洲'; 'aws-ap-southeast-4'='大洋洲'; 'aws-ap-southeast-6'='大洋洲'
+}
+function Get-Continent([string]$code) {
+    if ($ContinentExceptions.ContainsKey($code)) { return $ContinentExceptions[$code] }
+    if ($code -like 'azure-*') {
+        $n = $code.Substring(6)
+        if ($n -match 'australia|newzealand') { return '大洋洲' }
+        if ($n -match 'asia|japan|korea|india|indonesia|malaysia|taiwan') { return '亚洲' }
+        if ($n -match 'uae|qatar|israel|saudi') { return '中东' }
+        if ($n -match 'southafrica') { return '非洲' }
+        if ($n -match 'brazil|chile') { return '南美' }
+        if ($n -match 'us\d?$|canada|mexico') { return '北美' }
+        if ($n -match 'europe|uk|france|germany|norway|sweden|switzerland|poland|italy|spain|austria|belgium|denmark|finland|greece') { return '欧洲' }
+        return '其他'
+    }
+    switch -Regex ($code -replace '^aws-', '') {
+        '^ap-'         { return '亚洲' }
+        '^(us|ca|mx)-' { return '北美' }
+        '^sa-'         { return '南美' }
+        '^(eu|uk)-'    { return '欧洲' }
+        '^(il|me)-'    { return '中东' }
+        '^af-'         { return '非洲' }
+    }
+    '其他'
+}
+$Catalog = [ordered]@{}   # 代码 -> @{ Name; Host; Provider; Continent }
 foreach ($k in $OracleRegions.Keys) { $Catalog[$k] = @{ Name = "Oracle $($OracleRegions[$k])"; Host = "objectstorage.$k.oraclecloud.com"; Provider = 'Oracle' } }
 foreach ($k in $AzureRegions.Keys)  { $Catalog["azure-$k"] = @{ Name = "Azure $($AzureRegions[$k])"; Host = "s8$k.blob.core.windows.net"; Provider = 'Azure' } }
 foreach ($k in $AwsRegions.Keys)    { $Catalog["aws-$k"] = @{ Name = "AWS $($AwsRegions[$k])"; Host = "dynamodb.$k.amazonaws.com"; Provider = 'AWS' } }
+foreach ($k in @($Catalog.Keys))    { $Catalog[$k].Continent = Get-Continent $k }
 
 # ---------- 读取配置（可选） ----------
 $Reference      = [ordered]@{}   # 名称 -> 'host:port'，作为对照组每次都测
@@ -89,7 +119,7 @@ if (Test-Path $Config) {
 }
 
 if ($ListRegions) {
-    $list = foreach ($k in $Catalog.Keys) { [pscustomobject]@{ code = $k; name = $Catalog[$k].Name; provider = $Catalog[$k].Provider } }
+    $list = foreach ($k in $Catalog.Keys) { [pscustomobject]@{ code = $k; name = $Catalog[$k].Name; provider = $Catalog[$k].Provider; continent = $Catalog[$k].Continent } }
     [pscustomobject]@{ regions = @($list); references = @($Reference.Keys); referenceNames = $ReferenceNames; defaultRegions = $DefaultRegions } |
         ConvertTo-Json -Depth 4 -Compress
     return
