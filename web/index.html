@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>云区域测速</title>
+<script src="echarts.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1f2328;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--good:#16a34a;--ok:#65a30d;--warn:#d97706;--bad:#dc2626;--chip:#eef2ff}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--fg:#e5e7eb;--muted:#9ca3af;--line:#2a2f3a;--accent:#60a5fa;--chip:#1e2533}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+.label{color:var(--muted)}
+nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+nav button{border:0;background:transparent;color:var(--fg);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px}
+nav button.active{background:var(--accent);color:#fff}
+main{padding:20px;max-width:1400px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
+.card h2{font-size:16px;margin:0 0 12px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.muted{color:var(--muted)}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--fg);padding:7px 14px;border-radius:8px;cursor:pointer}
+.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.danger{background:var(--bad);color:#fff;border-color:var(--bad)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+select,input[type=number],input[type=text]{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.group{margin:10px 0}
+.group b{display:inline-block;min-width:60px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chips label{background:var(--chip);border-radius:16px;padding:3px 10px;cursor:pointer;user-select:none;font-size:13px}
+.chips input{margin-right:4px}
+.progress{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:10px 0}
+.progress div{height:100%;background:var(--accent);width:0;transition:width .5s}
+pre.log{background:#0b0d12;color:#cbd5e1;padding:12px;border-radius:8px;max-height:260px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:0}
+table{border-collapse:collapse;width:100%}
+th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{font-weight:600;color:var(--muted);cursor:pointer;position:sticky;top:0;background:var(--card)}
+td.num,th.num{text-align:right}
+.tablewrap{overflow:auto;max-height:560px}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;color:#fff;font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.kpi .v{font-size:20px;font-weight:700;margin-top:4px}
+.chart{width:100%;height:460px}
+.path{font-size:12px;color:var(--muted);white-space:normal}
+.hidden{display:none}
+.hours{display:grid;grid-template-columns:repeat(12,minmax(48px,1fr));gap:6px;margin:10px 0}
+.hours label{background:var(--chip);border-radius:8px;padding:6px 0;text-align:center;cursor:pointer;user-select:none;font-size:13px}
+.hours label.on{background:var(--accent);color:#fff}
+.hours input{display:none}
+dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}
+dl.kv dt{color:var(--muted)}
+dl.kv dd{margin:0}
+.note{background:var(--chip);border-radius:8px;padding:8px 12px;font-size:13px;margin-top:10px}
+.opt{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px dashed var(--line)}
+@media (max-width:700px){.hours{grid-template-columns:repeat(6,1fr)}}
+.tag{font-size:11px;padding:0 6px;border-radius:6px;border:1px solid var(--line);color:var(--muted);margin-left:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>云区域测速</h1><span class="label" id="site"></span>
+  <nav>
+    <button data-tab="run" class="active">执行测速</button>
+    <button data-tab="overview">统计总览</button>
+    <button data-tab="trend">趋势</button>
+    <button data-tab="detail">明细</button>
+    <button data-tab="schedule">定时任务</button>
+    <button data-tab="data">数据管理</button>
+  </nav>
+</header>
+<main>
+<!-- 执行测速 -->
+<section id="tab-run">
+  <div class="card">
+    <h2>选择测速区域 <span class="muted" style="font-weight:normal;font-size:13px">（对照组每次都会测）</span></h2>
+    <div class="row">
+      <button class="btn" data-sel="all">全选</button>
+      <button class="btn" data-sel="none">清空</button>
+      <button class="btn" data-sel="asia">亚洲区域</button>
+      <button class="btn" data-sel="top">常用对比</button>
+    </div>
+    <div id="regionGroups"></div>
+    <div class="row" style="margin-top:12px">
+      <label>每个区域测 <input type="number" id="rounds" value="12" min="1" max="50" style="width:64px"> 次</label>
+      <label><input type="checkbox" id="trace"> 追踪去程/回程路径（多约 1~2 分钟）</label>
+      <span id="estimate" class="muted"></span>
+      <span style="flex:1"></span>
+      <button class="btn primary" id="btnRun">开始测速</button>
+      <button class="btn danger hidden" id="btnStop">停止</button>
+    </div>
+  </div>
+  <div class="card" id="runCard">
+    <h2>运行状态</h2>
+    <div id="runMsg" class="muted">尚未开始。</div>
+    <div class="progress"><div id="bar"></div></div>
+    <details><summary class="muted">运行日志</summary><pre class="log" id="log"></pre></details>
+  </div>
+  <div class="card hidden" id="resultCard">
+    <h2>本次结果 <span class="muted" id="resultStamp" style="font-weight:normal"></span></h2>
+    <div class="tablewrap"><table id="resultTable"></table></div>
+    <div id="resultPaths" style="margin-top:12px"></div>
+  </div>
+</section>
+
+<!-- 统计总览 -->
+<section id="tab-overview" class="hidden">
+  <div class="card row">
+    <label>时间范围 <select id="ovRange">
+      <option value="1">最近 24 小时</option><option value="3">最近 3 天</option>
+      <option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option><option value="0">全部</option></select></label>
+    <span id="ovProviders"></span>
+    <button class="btn" id="ovReload">刷新数据</button>
+    <span class="muted" id="ovInfo"></span>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="card" style="margin-top:16px">
+    <h2>区域排名 <span class="muted" style="font-weight:normal;font-size:13px">（点击表头排序；中位 = 每次测速中位延迟的中位数；异常率 = 超时 + 超过 1 秒的比例）</span></h2>
+    <div class="tablewrap"><table id="rankTable"></table></div>
+  </div>
+  <div class="card">
+    <div class="row"><h2 style="margin:0">按小时热力图</h2>
+      <label>指标 <select id="hmMetric"><option value="lat">中位延迟</option><option value="loss">异常率</option></select></label>
+      <label>显示 <select id="hmTop"><option value="15">最好的 15 个</option><option value="25">最好的 25 个</option><option value="999">全部</option></select></label>
+      <span class="muted">横轴为本机时间的小时，颜色越红越差</span></div>
+    <div id="heatmap" class="chart" style="height:560px"></div>
+  </div>
+</section>
+
+<!-- 趋势 -->
+<section id="tab-trend" class="hidden">
+  <div class="card">
+    <div class="row">
+      <label>时间范围 <select id="trRange"><option value="1">24 小时</option><option value="3">3 天</option><option value="7" selected>7 天</option><option value="30">30 天</option><option value="0">全部</option></select></label>
+      <label>指标 <select id="trMetric"><option value="lat">中位延迟</option><option value="loss">异常率</option></select></label>
+      <label><input type="checkbox" id="trLog"> 对数坐标</label>
+      <button class="btn" id="trDefault">恢复默认区域</button>
+    </div>
+    <div class="chips" id="trRegions"></div>
+  </div>
+  <div class="card"><div id="trendChart" class="chart"></div></div>
+</section>
+
+<!-- 明细 -->
+<section id="tab-detail" class="hidden">
+  <div class="card row">
+    <label>区域 <select id="dtRegion"><option value="">全部</option></select></label>
+    <label>时间范围 <select id="dtRange"><option value="1">24 小时</option><option value="3" selected>3 天</option><option value="7">7 天</option><option value="0">全部</option></select></label>
+    <label>只看异常 <input type="checkbox" id="dtBad"></label>
+    <span class="muted" id="dtInfo"></span>
+    <span style="flex:1"></span>
+    <button class="btn" id="dtPrev">上一页</button><span id="dtPage"></span><button class="btn" id="dtNext">下一页</button>
+  </div>
+  <div class="card"><div class="tablewrap"><table id="detailTable"></table></div></div>
+</section>
+
+<!-- 定时任务 -->
+<section id="tab-schedule" class="hidden">
+  <div class="card">
+    <h2>当前状态 <button class="btn" id="scRefresh" style="margin-left:8px;font-size:12px;padding:3px 10px">刷新</button></h2>
+    <dl class="kv" id="scStatus"></dl>
+    <div class="row" style="margin-top:14px">
+      <button class="btn" id="scToggle">暂停</button>
+      <button class="btn" id="scRunNow">立即运行一次</button>
+      <button class="btn danger" id="scUninstall">卸载定时任务</button>
+      <span class="muted" id="scMsg"></span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>设置运行时间 <span class="muted" style="font-weight:normal;font-size:13px">（每天在勾选的整点各测一次；测全部区域每次约 6~8 分钟）</span></h2>
+    <div class="row">
+      <button class="btn" data-hours="all">每小时</button>
+      <button class="btn" data-hours="2">每 2 小时</button>
+      <button class="btn" data-hours="3">每 3 小时</button>
+      <button class="btn" data-hours="eve">只测晚上 18~23 点</button>
+      <button class="btn" data-hours="none">清空</button>
+    </div>
+    <div class="hours" id="scHours"></div>
+    <div class="row">
+      <label>每次随机推迟 0 ~ <input type="number" id="scDelay" min="0" max="59" value="5" style="width:60px"> 分钟</label>
+      <span class="muted">（避免总在整点测；电脑关机或睡眠错过的时间点，会在开机或唤醒后补测一次）</span>
+      <span style="flex:1"></span>
+      <button class="btn primary" id="scSave">保存并安装</button>
+    </div>
+    <div class="note" id="scLogon"></div>
+    <details id="scOutWrap" class="hidden" style="margin-top:10px"><summary class="muted">安装输出</summary><pre class="log" id="scOut"></pre></details>
+  </div>
+</section>
+
+<!-- 数据管理 -->
+<section id="tab-data" class="hidden">
+  <div class="kpis" id="dmKpis"></div>
+  <div class="card" style="margin-top:16px">
+    <h2>清理测速数据 <span class="muted" style="font-weight:normal;font-size:13px">（清理前会自动备份到 data\backup，可在下方恢复）</span></h2>
+    <div class="opt"><label><input type="radio" name="dmMode" value="before" checked> 删除</label>
+      <input type="number" id="dmDays" value="30" min="1" style="width:70px"> <span>天以前的数据</span></div>
+    <div class="opt"><label><input type="radio" name="dmMode" value="run"> 删除某一次测速：</label>
+      <select id="dmRun"></select></div>
+    <div class="opt"><label><input type="radio" name="dmMode" value="region"> 删除某个区域的全部数据：</label>
+      <select id="dmRegion"></select></div>
+    <div class="opt"><label><input type="radio" name="dmMode" value="all"> 清空全部测速数据</label></div>
+    <div class="opt"><label><input type="radio" name="dmMode" value="logs"> 不删测速数据，只清理运行日志</label></div>
+    <div class="opt"><label><input type="checkbox" id="dmLogs"> 同时删除</label>
+      <input type="number" id="dmLogDays" value="30" min="1" style="width:70px"> <span>天以前的运行日志（data\logs，日志不备份）</span></div>
+    <div class="row" style="margin-top:12px"><span class="muted" id="dmPreview"></span><span style="flex:1"></span>
+      <button class="btn danger" id="dmClean">执行清理</button></div>
+  </div>
+  <div class="card">
+    <h2>备份 <span class="muted" style="font-weight:normal;font-size:13px">（每次清理或恢复前自动生成，只保留最近 10 份）</span></h2>
+    <div class="tablewrap"><table id="dmBackups"></table></div>
+  </div>
+</section>
+</main>
+
+<script>
+const TOKEN = '__TOKEN__';
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+let INFO = null, ROWS = [], charts = {};
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'X-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  if (!r.ok) throw new Error(path + ' ' + r.status);
+  return path === '/api/csv' ? r.text() : r.json();
+}
+
+// ---------- 数据 ----------
+function parseCSV(text) {
+  text = text.replace(/^﻿/, '');
+  const out = []; let row = [], f = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(f); f = ''; if (row.length > 1) out.push(row); row = []; }
+    else f += c;
+  }
+  if (f || row.length) { row.push(f); if (row.length > 1) out.push(row); }
+  if (!out.length) return [];
+  const h = out[0];
+  return out.slice(1).map(r => Object.fromEntries(h.map((k, i) => [k, r[i] ?? ''])));
+}
+const num = v => (v === '' || v == null) ? null : Number(v);
+function provider(code) { if (code.startsWith('azure-')) return 'Azure'; if (code.startsWith('aws-')) return 'AWS'; if (/^[a-z]{2}-[a-z]+-\d$/.test(code)) return 'Oracle'; return '对照'; }
+function normalize(r) {
+  const t = new Date(r['时间'].replace(' ', 'T'));
+  const n = num(r['样本数']) || 0, bad = (num(r['超时次数']) || 0) + (num(r['超1秒次数']) || 0);
+  return { stamp: r['时间'], t, hour: t.getHours(), code: r['区域'], name: r['位置'] || r['区域'], prov: provider(r['区域']),
+    med: num(r['中位ms']), min: num(r['最快ms']), max: num(r['最慢ms']), to: num(r['超时次数']) || 0, slow: num(r['超1秒次数']) || 0,
+    n, bad, loss: n ? bad / n : 0, fwd: r['去程路径'] || '', ret: r['回程路径'] || '' };
+}
+async function loadData() { ROWS = parseCSV(await api('/api/csv')).map(normalize).filter(r => !isNaN(r.t)); return ROWS; }
+function inRange(rows, days) { if (!+days) return rows; const since = Date.now() - days * 86400000; return rows.filter(r => r.t.getTime() >= since); }
+function median(a) { a = a.filter(x => x != null).sort((x, y) => x - y); if (!a.length) return null; return a[Math.floor(a.length / 2)]; }
+
+// ---------- 样式辅助 ----------
+function latColor(ms) { if (ms == null) return '#9ca3af'; if (ms < 100) return '#16a34a'; if (ms < 180) return '#65a30d'; if (ms < 300) return '#d97706'; return '#dc2626'; }
+function lossColor(p) { if (p < 0.03) return '#16a34a'; if (p < 0.1) return '#d97706'; return '#dc2626'; }
+const pillMs = ms => ms == null ? '<span class="muted">-</span>' : `<span class="pill" style="background:${latColor(ms)}">${ms}</span>`;
+const pillLoss = p => `<span class="pill" style="background:${lossColor(p)}">${(p * 100).toFixed(1)}%</span>`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function chart(id) { if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), dark ? 'dark' : null); return charts[id]; }
+addEventListener('resize', () => Object.values(charts).forEach(c => c.resize()));
+
+// ---------- 标签页 ----------
+$$('nav button').forEach(b => b.onclick = () => {
+  $$('nav button').forEach(x => x.classList.toggle('active', x === b));
+  $$('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + b.dataset.tab));
+  ({ overview: renderOverview, trend: renderTrend, detail: renderDetail, schedule: loadSchedule, data: loadDataMgmt })[b.dataset.tab]?.();
+  clearInterval(scTimer); if (b.dataset.tab === 'schedule') scTimer = setInterval(() => loadSchedule(true), 5000);
+  setTimeout(() => Object.values(charts).forEach(c => c.resize()), 50);
+});
+
+// ---------- 执行测速 ----------
+const TOP = ['ap-chuncheon-1', 'ap-osaka-1', 'ap-tokyo-1', 'azure-southeastasia', 'azure-malaysiawest', 'azure-japaneast', 'azure-eastasia', 'aws-ap-northeast-1', 'aws-ap-east-1', 'aws-ap-southeast-1', 'aws-ap-northeast-2'];
+function renderRegionPicker() {
+  const groups = {};
+  INFO.regions.forEach(r => (groups[r.provider] ||= []).push(r));
+  $('#regionGroups').innerHTML = `<div class="group"><b>对照组</b> <span class="muted">${INFO.references.map(esc).join('、') || '（无，可在 config\\config.psd1 的 Reference 中添加自己的服务器）'}</span></div>` +
+    Object.entries(groups).map(([p, list]) => `<div class="group"><b>${p}</b> <span class="muted">(${list.length})</span>
+      <div class="chips">${list.map(r => `<label><input type="checkbox" class="reg" value="${r.code}">${esc(r.name)}</label>`).join('')}</div></div>`).join('');
+  $$('.reg').forEach(c => c.onchange = updateEstimate);
+  select('top');
+}
+function select(mode) {
+  $$('.reg').forEach(c => c.checked = mode === 'all' ? true : mode === 'none' ? false :
+    mode === 'asia' ? (/^(aws-)?ap-/.test(c.value) || c.value.startsWith('azure-')) : TOP.includes(c.value));
+  updateEstimate();
+}
+$$('[data-sel]').forEach(b => b.onclick = () => select(b.dataset.sel));
+function updateEstimate() {
+  const n = $$('.reg:checked').length + INFO.references.length, k = +$('#rounds').value || 12;
+  const sec = Math.ceil(n * k * 0.35 + ($('#trace').checked ? 75 : 0));
+  $('#estimate').textContent = `共 ${n} 个目标，预计约 ${sec < 90 ? sec + ' 秒' : Math.ceil(sec / 60) + ' 分钟'}`;
+}
+$('#rounds').oninput = updateEstimate; $('#trace').onchange = updateEstimate;
+
+let pollTimer = null;
+$('#btnRun').onclick = async () => {
+  const regions = $$('.reg:checked').map(c => c.value);
+  if (!regions.length && !confirm('没有选择区域，只测对照组？')) return;
+  const r = await api('/api/run', { method: 'POST', body: JSON.stringify({ regions, rounds: +$('#rounds').value || 12, trace: $('#trace').checked }) });
+  if (!r.ok) { alert(r.message); return; }
+  $('#resultCard').classList.add('hidden');
+  startPolling();
+};
+$('#btnStop').onclick = async () => { if (confirm('停止本次测速？已测的数据不会保存。')) { await api('/api/stop', { method: 'POST' }); } };
+function startPolling() { clearInterval(pollTimer); pollTimer = setInterval(poll, 1500); poll(); }
+async function poll() {
+  const s = await api('/api/status');
+  if (!s.hasRun) return;
+  $('#btnRun').disabled = s.running; $('#btnStop').classList.toggle('hidden', !s.running);
+  $('#log').textContent = s.log + (s.error ? '\n[错误输出]\n' + s.error : '');
+  let pct = 0, msg = '';
+  if (s.running) {
+    if (s.tracing) { pct = 90; msg = '延迟测完，正在追踪路径并查询沿途 IP 归属…'; }
+    else if (s.roundsTotal) { pct = Math.round(s.roundsDone / s.roundsTotal * (s.args.trace ? 80 : 95)); msg = `正在测速：第 ${s.roundsDone} / ${s.roundsTotal} 轮`; }
+    else { pct = 3; msg = '正在解析各区域地址…'; }
+    msg += `（已用 ${s.elapsed} 秒）`;
+  } else {
+    clearInterval(pollTimer);
+    const ok = s.exitCode === 0 || (s.exitCode == null && /结果已追加/.test(s.log));
+    pct = 100; msg = ok ? `完成，用时 ${s.elapsed} 秒。` : `已结束（退出码 ${s.exitCode}），请查看运行日志。`;
+    if (ok) await showRunResult(s.startedStamp);
+  }
+  $('#runMsg').textContent = msg; $('#bar').style.width = pct + '%';
+}
+async function showRunResult(startedStamp) {
+  await loadData();
+  const stamps = [...new Set(ROWS.map(r => r.stamp))].filter(s => s >= startedStamp).sort();
+  if (!stamps.length) return;
+  const stamp = stamps[stamps.length - 1], rows = ROWS.filter(r => r.stamp === stamp).sort((a, b) => (a.med ?? 1e9) - (b.med ?? 1e9));
+  $('#resultStamp').textContent = stamp;
+  $('#resultTable').innerHTML = '<tr><th>区域</th><th>位置</th><th>类型</th><th class="num">中位ms</th><th class="num">最快</th><th class="num">最慢</th><th class="num">超时</th><th class="num">超1秒</th><th class="num">异常率</th></tr>' +
+    rows.map(r => `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td><span class="tag">${r.prov}</span></td><td class="num">${pillMs(r.med)}</td><td class="num">${r.min ?? '-'}</td><td class="num">${r.max ?? '-'}</td><td class="num">${r.to}</td><td class="num">${r.slow}</td><td class="num">${pillLoss(r.loss)}</td></tr>`).join('');
+  const withPath = rows.filter(r => r.fwd || r.ret);
+  $('#resultPaths').innerHTML = withPath.length ? '<h2>路径</h2>' + withPath.map(r =>
+    `<div style="margin-bottom:8px"><b>${esc(r.code)} ${esc(r.name)}</b> ${pillMs(r.med)}<div class="path">去程：${esc(r.fwd || '-')}<br>回程：${esc(r.ret || '未测')}</div></div>`).join('') : '';
+  $('#resultCard').classList.remove('hidden');
+}
+
+// ---------- 统计总览 ----------
+const PROVS = ['对照', 'Oracle', 'Azure', 'AWS'];
+$('#ovProviders').innerHTML = PROVS.map(p => `<label style="margin-right:8px"><input type="checkbox" class="ovp" value="${p}" checked>${p}</label>`).join('');
+$$('.ovp').forEach(c => c.onchange = renderOverview);
+$('#ovRange').onchange = renderOverview; $('#hmMetric').onchange = renderOverview; $('#hmTop').onchange = renderOverview;
+$('#ovReload').onclick = async () => { await loadData(); renderOverview(); };
+let rankSort = { key: 'eveMed', asc: true };
+
+function aggregate(rows) {
+  const by = {};
+  rows.forEach(r => (by[r.code] ||= []).push(r));
+  return Object.entries(by).map(([code, list]) => {
+    const eve = list.filter(r => r.hour >= 21);
+    const sum = (l, k) => l.reduce((s, r) => s + r[k], 0);
+    return { code, name: list[0].name, prov: list[0].prov, runs: list.length,
+      med: median(list.map(r => r.med)), eveMed: median(eve.map(r => r.med)), eveRuns: eve.length,
+      loss: sum(list, 'n') ? sum(list, 'bad') / sum(list, 'n') : 0, eveLoss: sum(eve, 'n') ? sum(eve, 'bad') / sum(eve, 'n') : null,
+      worst: Math.max(...list.map(r => r.max ?? 0)) };
+  });
+}
+function renderOverview() {
+  const provs = $$('.ovp:checked').map(c => c.value);
+  const rows = inRange(ROWS, $('#ovRange').value).filter(r => provs.includes(r.prov));
+  const runs = new Set(rows.map(r => r.stamp));
+  $('#ovInfo').textContent = rows.length ? `${runs.size} 次测速，${rows.length} 条记录，${rows[0].stamp} ~ ${rows[rows.length - 1].stamp}` : '该范围内没有数据';
+  const agg = aggregate(rows);
+  // KPI
+  const cand = agg.filter(a => a.eveMed != null);
+  const bestEve = [...cand].sort((a, b) => a.eveMed - b.eveMed)[0];
+  const stable = agg.filter(a => a.med != null && a.med < 150).sort((a, b) => a.loss - b.loss || a.med - b.med)[0];
+  const bestAll = agg.filter(a => a.med != null).sort((a, b) => a.med - b.med)[0];
+  $('#kpis').innerHTML = [
+    ['测速次数', runs.size + ' 次', `${agg.length} 个区域`],
+    ['全天最快', bestAll ? `${bestAll.name}` : '-', bestAll ? `中位 ${bestAll.med} ms，异常率 ${(bestAll.loss * 100).toFixed(1)}%` : ''],
+    ['晚高峰（21-24 点）最快', bestEve ? bestEve.name : '暂无晚高峰数据', bestEve ? `中位 ${bestEve.eveMed} ms，异常率 ${(bestEve.eveLoss * 100).toFixed(1)}%（${bestEve.eveRuns} 次）` : ''],
+    ['最稳定（中位 &lt;150ms 中异常率最低）', stable ? stable.name : '-', stable ? `异常率 ${(stable.loss * 100).toFixed(1)}%，中位 ${stable.med} ms` : ''],
+  ].map(([k, v, s]) => `<div class="kpi"><div class="muted">${k}</div><div class="v">${esc(v)}</div><div class="muted">${s}</div></div>`).join('');
+  // 排名表
+  const cols = [['code', '区域'], ['name', '位置'], ['prov', '类型'], ['runs', '次数', 1], ['med', '全天中位ms', 1], ['eveMed', '晚高峰中位ms', 1], ['loss', '全天异常率', 1], ['eveLoss', '晚高峰异常率', 1], ['worst', '最慢ms', 1]];
+  const sorted = [...agg].sort((a, b) => { const x = a[rankSort.key], y = b[rankSort.key]; if (x == null) return 1; if (y == null) return -1;
+    return (typeof x === 'string' ? x.localeCompare(y) : x - y) * (rankSort.asc ? 1 : -1); });
+  $('#rankTable').innerHTML = '<tr>' + cols.map(([k, t, n]) => `<th class="${n ? 'num' : ''}" data-k="${k}">${t}${rankSort.key === k ? (rankSort.asc ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>' +
+    sorted.map(a => `<tr><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td><span class="tag">${a.prov}</span></td><td class="num">${a.runs}</td><td class="num">${pillMs(a.med)}</td><td class="num">${pillMs(a.eveMed)}</td><td class="num">${pillLoss(a.loss)}</td><td class="num">${a.eveLoss == null ? '<span class="muted">-</span>' : pillLoss(a.eveLoss)}</td><td class="num">${a.worst || '-'}</td></tr>`).join('');
+  $$('#rankTable th').forEach(th => th.onclick = () => { const k = th.dataset.k; rankSort = { key: k, asc: rankSort.key === k ? !rankSort.asc : true }; renderOverview(); });
+  // 热力图
+  const metric = $('#hmMetric').value, top = +$('#hmTop').value;
+  const order = agg.filter(a => a.med != null).sort((a, b) => a.med - b.med).slice(0, top).reverse();
+  const ylabels = order.map(a => a.name), idx = Object.fromEntries(order.map((a, i) => [a.code, i]));
+  const cells = {};
+  rows.forEach(r => { if (!(r.code in idx)) return; const k = idx[r.code] + '_' + r.hour; (cells[k] ||= []).push(r); });
+  const data = Object.entries(cells).map(([k, l]) => { const [y, h] = k.split('_').map(Number);
+    const v = metric === 'lat' ? median(l.map(r => r.med)) : +(l.reduce((s, r) => s + r.bad, 0) / Math.max(1, l.reduce((s, r) => s + r.n, 0)) * 100).toFixed(1);
+    return [h, y, v, l.length]; });
+  chart('heatmap').setOption({
+    backgroundColor: 'transparent',
+    tooltip: { formatter: p => `${ylabels[p.value[1]]}<br>${p.value[0]}:00-${p.value[0]}:59<br>${metric === 'lat' ? '中位延迟 ' + p.value[2] + ' ms' : '异常率 ' + p.value[2] + '%'}<br>样本 ${p.value[3]} 次` },
+    grid: { left: 150, right: 30, top: 10, bottom: 70 },
+    xAxis: { type: 'category', data: [...Array(24).keys()].map(h => h + '时'), splitArea: { show: true } },
+    yAxis: { type: 'category', data: ylabels, splitArea: { show: true } },
+    visualMap: metric === 'lat' ? { min: 40, max: 400, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, inRange: { color: ['#16a34a', '#a3e635', '#facc15', '#f97316', '#dc2626'] } }
+                                : { min: 0, max: 30, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, inRange: { color: ['#16a34a', '#facc15', '#dc2626'] } },
+    series: [{ type: 'heatmap', data, label: { show: data.length < 400, fontSize: 10, formatter: p => p.value[2] }, emphasis: { itemStyle: { borderColor: '#000', borderWidth: 1 } } }]
+  }, true);
+}
+
+// ---------- 趋势 ----------
+let trSelected = null;
+function defaultTrend() { const codes = [...new Set(ROWS.map(r => r.code))]; return codes.filter(c => provider(c) === '对照' || ['ap-chuncheon-1', 'ap-osaka-1', 'azure-southeastasia', 'aws-ap-northeast-1'].includes(c)); }
+$('#trRange').onchange = renderTrend; $('#trMetric').onchange = renderTrend; $('#trLog').onchange = renderTrend;
+$('#trDefault').onclick = () => { trSelected = defaultTrend(); renderTrend(); };
+function renderTrend() {
+  if (!trSelected) trSelected = defaultTrend();
+  const names = {}; ROWS.forEach(r => names[r.code] = r.name);
+  const codes = Object.keys(names).sort((a, b) => PROVS.indexOf(provider(a)) - PROVS.indexOf(provider(b)) || a.localeCompare(b));
+  $('#trRegions').innerHTML = codes.map(c => `<label><input type="checkbox" class="trc" value="${c}" ${trSelected.includes(c) ? 'checked' : ''}>${esc(names[c])}</label>`).join('');
+  $$('.trc').forEach(x => x.onchange = () => { trSelected = $$('.trc:checked').map(c => c.value); drawTrend(); });
+  drawTrend();
+}
+function drawTrend() {
+  const metric = $('#trMetric').value, rows = inRange(ROWS, $('#trRange').value);
+  const series = trSelected.map(code => {
+    const l = rows.filter(r => r.code === code);
+    return { name: l[0]?.name || code, type: 'line', showSymbol: false, connectNulls: false, smooth: false,
+      data: l.map(r => [r.t, metric === 'lat' ? r.med : +(r.loss * 100).toFixed(1), r.to, r.slow]) };
+  });
+  chart('trendChart').setOption({
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : v + (metric === 'lat' ? ' ms' : '%') },
+    legend: { type: 'scroll', top: 0 },
+    grid: { left: 60, right: 30, top: 40, bottom: 70 },
+    xAxis: { type: 'time' },
+    yAxis: { type: $('#trLog').checked && metric === 'lat' ? 'log' : 'value', name: metric === 'lat' ? '中位延迟 ms' : '异常率 %' },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 10 }],
+    series
+  }, true);
+}
+
+// ---------- 明细 ----------
+let dtPage = 0;
+['#dtRegion', '#dtRange', '#dtBad'].forEach(s => $(s).onchange = () => { dtPage = 0; renderDetail(); });
+$('#dtPrev').onclick = () => { if (dtPage > 0) { dtPage--; renderDetail(); } };
+$('#dtNext').onclick = () => { dtPage++; renderDetail(); };
+function renderDetail() {
+  const sel = $('#dtRegion'), names = {}; ROWS.forEach(r => names[r.code] = r.name);
+  if (sel.options.length <= 1) Object.keys(names).sort().forEach(c => sel.add(new Option(`${c} ${names[c]}`, c)));
+  let rows = inRange(ROWS, $('#dtRange').value);
+  if (sel.value) rows = rows.filter(r => r.code === sel.value);
+  if ($('#dtBad').checked) rows = rows.filter(r => r.bad > 0);
+  rows = [...rows].reverse();
+  const per = 50, pages = Math.max(1, Math.ceil(rows.length / per)); dtPage = Math.min(dtPage, pages - 1);
+  $('#dtPage').textContent = ` ${dtPage + 1} / ${pages} `; $('#dtInfo').textContent = `${rows.length} 条`;
+  $('#detailTable').innerHTML = '<tr><th>时间</th><th>区域</th><th>位置</th><th class="num">中位</th><th class="num">最快</th><th class="num">最慢</th><th class="num">超时</th><th class="num">超1秒</th><th>路径</th></tr>' +
+    rows.slice(dtPage * per, dtPage * per + per).map(r => `<tr><td>${r.stamp}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td class="num">${pillMs(r.med)}</td><td class="num">${r.min ?? '-'}</td><td class="num">${r.max ?? '-'}</td><td class="num">${r.to}</td><td class="num">${r.slow}</td>
+      <td class="path">${r.fwd ? '去：' + esc(r.fwd) : ''}${r.ret ? '<br>回：' + esc(r.ret) : ''}</td></tr>`).join('');
+}
+
+// ---------- 定时任务 ----------
+let scTimer = null, SC = null;
+$('#scHours').innerHTML = [...Array(24).keys()].map(h => `<label><input type="checkbox" class="sch" value="${String(h).padStart(2, '0')}:00">${h} 点</label>`).join('');
+function paintHours() { $$('.sch').forEach(c => c.parentElement.classList.toggle('on', c.checked)); }
+$$('.sch').forEach(c => c.onchange = paintHours);
+$$('[data-hours]').forEach(b => b.onclick = () => {
+  const m = b.dataset.hours;
+  $$('.sch').forEach((c, h) => c.checked = m === 'all' ? true : m === 'none' ? false : m === 'eve' ? h >= 18 : h % +m === 0);
+  paintHours();
+});
+const RESULT = { 0: '成功', 1: '出错（退出码 1）', 267009: '正在运行', 267011: '尚未运行过', 267014: '被手动停止', 2147750687: '上一次还没结束，本次跳过' };
+const STATE = { Ready: '已启用，等待下次运行', Running: '正在运行', Disabled: '已暂停（不会自动运行）', Queued: '排队中' };
+async function loadSchedule(quiet) {
+  let s; try { s = await api('/api/schedule'); } catch (e) { return; }
+  SC = s;
+  const st = s.installed ? (STATE[s.state] || s.state) : '未安装';
+  const color = !s.installed ? 'var(--muted)' : s.state === 'Disabled' ? 'var(--warn)' : 'var(--good)';
+  const lr = s.lastResult == null ? '' : (RESULT[s.lastResult] ?? `代码 ${s.lastResult}`);
+  $('#scStatus').innerHTML = [
+    ['任务名称', esc(s.taskName)],
+    ['状态', `<b style="color:${color}">${st}</b>`],
+    ...(s.installed ? [
+      ['下次运行', s.state === 'Disabled' ? '<span class="muted">已暂停</span>' : (s.nextRun || '-')],
+      ['上次运行', s.lastRun ? `${s.lastRun}（${lr}）` : '尚未运行过'],
+      ['运行时间点', `每天 ${s.times.length} 次：${s.times.join(' ')}`],
+      ['运行方式', s.logonType === 'S4U' ? '不登录也运行（S4U）' : '只在登录 Windows 时运行'],
+    ] : [['说明', '尚未安装。在下方选好时间后点「保存并安装」。']]),
+    ...(s.installed && !s.samePath ? [['⚠ 注意', '<span style="color:var(--bad)">这个任务运行的是另一个文件夹里的程序。点「保存并安装」可改为当前文件夹。</span>']] : []),
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  $('#scToggle').disabled = $('#scUninstall').disabled = !s.installed;
+  $('#scToggle').textContent = s.state === 'Disabled' ? '启用（恢复自动运行）' : '暂停（保留任务）';
+  $('#scRunNow').disabled = !s.installed || s.state === 'Running' || s.state === 'Disabled';
+  if (!quiet) {
+    const times = s.installed && s.samePath ? s.times : s.config.times;
+    $$('.sch').forEach(c => c.checked = times.includes(c.value)); paintHours();
+    $('#scDelay').value = s.config.delay;
+  }
+  const lt = s.config.logonType;
+  $('#scLogon').innerHTML = (lt === 'S4U'
+    ? '运行方式：<b>不登录也运行（S4U）</b>。安装、启用、暂停、卸载都需要管理员权限' + (s.isAdmin ? '（当前网站已是管理员身份）。' : '：<b style="color:var(--bad)">当前网站不是管理员身份</b>，请关闭网站的命令行窗口，右键「启动测速网站.cmd」→「以管理员身份运行」。')
+    : '运行方式：<b>只在你登录 Windows 时运行</b>（锁屏也会运行），不需要管理员权限。') +
+    '<br>运行方式在 config\\config.psd1 的 Schedule.LogonType 中修改（个人电脑用 Interactive，服务器用 S4U）。';
+}
+async function scAction(action, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  const r = await api('/api/schedule/action', { method: 'POST', body: JSON.stringify({ action }) });
+  $('#scMsg').textContent = r.ok ? '' : r.message;
+  if (!r.ok) alert(r.message);
+  setTimeout(() => loadSchedule(true), 800);
+}
+$('#scRefresh').onclick = () => loadSchedule();
+$('#scToggle').onclick = () => scAction(SC.state === 'Disabled' ? 'enable' : 'disable');
+$('#scRunNow').onclick = () => scAction('runnow', '现在让定时任务在后台测一次（测全部区域约 6~8 分钟，结果写入数据文件）？\n运行期间网页上的「开始测速」暂时不可用。');
+$('#scUninstall').onclick = () => scAction('uninstall', '卸载定时任务？之后不再自动测速，已有数据保留。需要时可以重新「保存并安装」。');
+$('#scSave').onclick = async () => {
+  const times = $$('.sch:checked').map(c => c.value);
+  if (!times.length) { alert('请至少勾选一个时间点'); return; }
+  $('#scSave').disabled = true; $('#scSave').textContent = '正在安装…';
+  try {
+    const r = await api('/api/schedule/save', { method: 'POST', body: JSON.stringify({ times, delay: +$('#scDelay').value || 0, enabled: !SC || SC.state !== 'Disabled' }) });
+    $('#scOut').textContent = r.output || ''; $('#scOutWrap').classList.remove('hidden'); $('#scOutWrap').open = !r.ok;
+    alert(r.ok ? `已保存：每天 ${times.length} 次。` : '安装失败：' + (r.message || '') + '\n详见「安装输出」。');
+  } finally { $('#scSave').disabled = false; $('#scSave').textContent = '保存并安装'; loadSchedule(); }
+};
+
+// ---------- 数据管理 ----------
+let DM = null;
+async function loadDataMgmt() {
+  [DM] = await Promise.all([api('/api/data/stats'), loadData()]);
+  $('#dmKpis').innerHTML = [
+    ['测速记录', `${DM.rows} 条`, `${DM.runs} 次测速`],
+    ['时间范围', DM.first ? DM.first.slice(5) + ' ~ ' + DM.last.slice(5) : '无数据', DM.first ? `从 ${DM.first.slice(0, 4)} 年开始` : ''],
+    ['数据文件', `${DM.sizeKB} KB`, 'data\\latency.csv'],
+    ['运行日志', `${DM.logs} 个`, `${DM.logsKB} KB，data\\logs`],
+  ].map(([k, v, s]) => `<div class="kpi"><div class="muted">${k}</div><div class="v">${esc(v)}</div><div class="muted">${esc(s)}</div></div>`).join('');
+  const cnt = {}; ROWS.forEach(r => cnt[r.stamp] = (cnt[r.stamp] || 0) + 1);
+  $('#dmRun').innerHTML = DM.stamps.map(s => `<option value="${esc(s)}">${esc(s)}（${cnt[s] || 0} 条）</option>`).join('');
+  const names = {}, rc = {}; ROWS.forEach(r => { names[r.code] = r.name; rc[r.code] = (rc[r.code] || 0) + 1; });
+  $('#dmRegion').innerHTML = Object.keys(names).sort((a, b) => PROVS.indexOf(provider(a)) - PROVS.indexOf(provider(b)) || a.localeCompare(b))
+    .map(c => `<option value="${esc(c)}">${esc(c)} ${esc(names[c])}（${rc[c]} 条）</option>`).join('');
+  $('#dmBackups').innerHTML = DM.backups.length ? '<tr><th>备份时间</th><th class="num">记录数</th><th class="num">大小</th><th>文件名（data\backup）</th><th></th></tr>' +
+    DM.backups.map(b => `<tr><td>${esc(b.time)}</td><td class="num">${b.rows} 条</td><td class="num">${b.sizeKB} KB</td><td class="muted">${esc(b.name)}</td><td><button class="btn" data-restore="${esc(b.name)}">恢复为这份</button></td></tr>`).join('')
+    : '<tr><td class="muted">还没有备份</td></tr>';
+  $$('[data-restore]').forEach(b => b.onclick = async () => {
+    if (!confirm(`用 ${b.dataset.restore} 覆盖当前数据？\n当前数据会先自动备份一份，之后还能恢复回来。`)) return;
+    const r = await api('/api/data/restore', { method: 'POST', body: JSON.stringify({ name: b.dataset.restore }) });
+    alert(r.ok ? `已恢复，当前共 ${r.rows} 条记录。` : r.message); afterDataChange();
+  });
+  dmPreview();
+}
+function dmMode() { return $$('[name=dmMode]').find(r => r.checked).value; }
+function dmCount() {
+  const m = dmMode();
+  if (m === 'before') { const cut = Date.now() - (+$('#dmDays').value || 0) * 86400000; return ROWS.filter(r => r.t.getTime() < cut).length; }
+  if (m === 'run') return ROWS.filter(r => r.stamp === $('#dmRun').value).length;
+  if (m === 'region') return ROWS.filter(r => r.code === $('#dmRegion').value).length;
+  if (m === 'all') return ROWS.length;
+  return 0;
+}
+function dmPreview() {
+  const n = dmCount(), m = dmMode(), logs = $('#dmLogs').checked, ld = +$('#dmLogDays').value;
+  $('#dmPreview').textContent = m === 'logs'
+    ? (logs ? `将删除 ${ld} 天以前的运行日志，测速数据不变` : '请勾选下面的「同时删除…运行日志」')
+    : `将删除 ${n} 条记录，保留 ${ROWS.length - n} 条` + (logs ? `；并删除 ${ld} 天以前的运行日志` : '');
+}
+['#dmDays', '#dmRun', '#dmRegion', '#dmLogs', '#dmLogDays'].forEach(s => { $(s).addEventListener('input', dmPreview); $(s).addEventListener('change', dmPreview); });
+$$('[name=dmMode]').forEach(r => r.onchange = dmPreview);
+$('#dmClean').onclick = async () => {
+  const m = dmMode(), n = dmCount(), logs = $('#dmLogs').checked, ld = +$('#dmLogDays').value;
+  if (m === 'logs' && !logs) { alert('请勾选「同时删除…运行日志」并填写天数'); return; }
+  if (m !== 'logs' && !n && !logs) { alert('没有符合条件的记录'); return; }
+  const parts = [];
+  if (m !== 'logs' && n) parts.push(m === 'all' ? `清空全部 ${n} 条测速记录` : `删除 ${n} 条测速记录`);
+  if (logs) parts.push(`删除 ${ld} 天以前的运行日志（日志不备份）`);
+  if (!confirm(`确定${parts.join('，并')}？` + (m !== 'logs' && n ? '\n测速数据会先自动备份，可在下方「备份」中恢复。' : ''))) return;
+  const r = await api('/api/data/clean', { method: 'POST', body: JSON.stringify({ mode: m, days: +$('#dmDays').value, stamp: $('#dmRun').value, code: $('#dmRegion').value, cleanLogs: logs, logDays: ld }) });
+  alert(r.ok ? `完成：删除 ${r.removed} 条记录，剩余 ${r.remaining} 条` + (logs ? `；删除日志 ${r.logsRemoved} 个` : '') + (r.backup ? `\n备份：data\\backup\\${r.backup}` : '') : r.message);
+  afterDataChange();
+};
+function afterDataChange() { $('#dtRegion').length = 1; trSelected = null; loadDataMgmt(); }
+
+// ---------- 启动 ----------
+(async () => {
+  try {
+    INFO = await api('/api/info');
+    $('#site').textContent = INFO.label ? '— ' + INFO.label : '';
+    document.title = '云区域测速 - ' + INFO.label;
+    renderRegionPicker();
+    await loadData();
+    const s = await api('/api/status');
+    if (s.hasRun && s.running) startPolling();
+  } catch (e) { document.body.insertAdjacentHTML('afterbegin', `<div style="background:#dc2626;color:#fff;padding:10px">加载失败：${esc(e.message)}（请先双击「启动测速网站.cmd」，再从它打开的地址访问本页）</div>`); }
+})();
+</script>
+</body>
+</html>
