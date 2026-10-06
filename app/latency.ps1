@@ -210,9 +210,11 @@ if (Test-Path $CachePath) {
 function Test-PrivateIp([string]$ip) {
     return $ip -match '^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|169\.254\.)'
 }
+$script:IpFailed = @{}   # 本次运行中查询失败的 IP（被限流、断网等）：本次不再重复查询，但不写入缓存文件，下次运行重新查
 function Get-IpInfo([string]$ip) {
-    if ($script:IpCache.ContainsKey($ip)) { return $script:IpCache[$ip] }
-    $info = [pscustomobject]@{ asn = 0; org = '?'; city = ''; country = '' }
+    # org = '?' 是旧版本把查询失败写进缓存留下的记录，视为没有缓存、重新查询
+    if ($script:IpCache.ContainsKey($ip) -and $script:IpCache[$ip].org -ne '?') { return $script:IpCache[$ip] }
+    if ($script:IpFailed.ContainsKey($ip)) { return $script:IpFailed[$ip] }
     try {
         $wc = New-Object Net.WebClient; $wc.Encoding = [Text.Encoding]::UTF8
         $url = "https://ipinfo.io/$ip/json"; if ($IpinfoToken) { $url += "?token=$IpinfoToken" }
@@ -220,8 +222,11 @@ function Get-IpInfo([string]$ip) {
         $asn = 0; $org = "$($j.org)"
         if ($org -match '^AS(\d+)\s*(.*)$') { $asn = [int]$matches[1]; $org = $matches[2] }
         $info = [pscustomobject]@{ asn = $asn; org = $org; city = "$($j.city)"; country = "$($j.country)" }
-    } catch {}
-    $script:IpCache[$ip] = $info
+        $script:IpCache[$ip] = $info
+    } catch {
+        $info = [pscustomobject]@{ asn = 0; org = '?'; city = ''; country = '' }
+        $script:IpFailed[$ip] = $info
+    }
     return $info
 }
 function Save-IpCache {
